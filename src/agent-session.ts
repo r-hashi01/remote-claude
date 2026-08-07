@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { getSandbox } from '@cloudflare/sandbox';
+import { getSandboxProvider, type SandboxSession } from './providers';
 import {
   NdjsonBuffer,
   rpcNotify,
@@ -132,7 +132,7 @@ export class AgentSession extends DurableObject<Env> {
   async close(): Promise<void> {
     this.turn?.abort();
     try {
-      await this.sandbox().destroy();
+      await (await this.sandbox()).destroy();
     } catch {
       /* already gone */
     }
@@ -153,7 +153,7 @@ export class AgentSession extends DurableObject<Env> {
       this.env.GITHUB_APP_PRIVATE_KEY,
       this.env.REMOTE_CLAUDE_TOKEN,
     ]);
-    const sandbox = this.sandbox();
+    const sandbox = await this.sandbox();
 
     // Echo the user's turn so a client that joins mid-session sees full history.
     this.emitUpdate(sessionId, {
@@ -171,9 +171,8 @@ export class AgentSession extends DurableObject<Env> {
 
       const exec = sandbox.exec(command, {
         cwd: REPO_DIR,
-        timeout: config.claudeTimeoutMs,
+        timeoutMs: config.claudeTimeoutMs,
         env: claudeEnvironment(this.env, config),
-        stream: true,
         onOutput: (stream, data) => {
           if (stream !== 'stdout') return;
           for (const event of buffer.push(data)) {
@@ -192,7 +191,7 @@ export class AgentSession extends DurableObject<Env> {
         controller.signal.addEventListener(
           'abort',
           () => {
-            void sandbox.killAllProcesses().catch(() => {});
+            void sandbox.killAll().catch(() => {});
             reject(new Error('cancelled'));
           },
           { once: true }
@@ -224,7 +223,7 @@ export class AgentSession extends DurableObject<Env> {
 
   /** Clone once per session; later turns reuse the same working tree. */
   private async ensureRepo(
-    sandbox: ReturnType<typeof getSandbox>,
+    sandbox: SandboxSession,
     config: Config,
     redact: Redactor,
     sessionId: string
@@ -236,7 +235,7 @@ export class AgentSession extends DurableObject<Env> {
       content: { type: 'text', text: `Preparing ${redact(config.repoUrl)} (${config.defaultBaseBranch})…` },
     });
 
-    await sandbox.gitCheckout(config.repoUrl, {
+    await sandbox.cloneRepository(config.repoUrl, {
       branch: config.defaultBaseBranch,
       targetDir: REPO_DIR,
     });
@@ -244,11 +243,10 @@ export class AgentSession extends DurableObject<Env> {
     this.writeMeta('prepared', 'true');
   }
 
-  private sandbox() {
+  private sandbox(): Promise<SandboxSession> {
     const config = loadConfig(this.env);
-    return getSandbox(this.env.Sandbox, `acp-${this.ctx.id.toString().slice(0, 16)}`, {
+    return getSandboxProvider(this.env).create(`acp-${this.ctx.id.toString().slice(0, 16)}`, {
       sleepAfter: config.sleepAfter,
-      enableDefaultSession: false,
     });
   }
 

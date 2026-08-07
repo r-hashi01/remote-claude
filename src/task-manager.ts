@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { loadConfig } from './config';
+import { getSandboxProvider, type SnapshotRef } from './providers';
 import { createRedactor, type Redactor } from './redact';
 import { MAX_PROMPT_LENGTH, runTask, TaskCancelledError } from './runner';
 import type { Env, LogLine, TaskRecord, TaskRequest, TaskStatus } from './types';
@@ -49,6 +50,10 @@ export class TaskManager extends DurableObject<Env> {
           chunk   INTEGER NOT NULL,
           body    TEXT NOT NULL,
           PRIMARY KEY (task_id, name, chunk)
+        );
+        CREATE TABLE IF NOT EXISTS meta (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
         );
       `);
 
@@ -225,12 +230,21 @@ export class TaskManager extends DurableObject<Env> {
   ): Promise<void> {
     const config = loadConfig(this.env);
 
+    // Provider choice lives here, not in the runner: task execution must stay
+    // independent of which backend actually runs the sandbox (requirements 6.4).
+    const sandbox = await getSandboxProvider(this.env).create(`rc-${record.id}`, {
+      sleepAfter: config.sleepAfter,
+    });
+
     try {
       const outcome = await runTask(record, {
         env: this.env,
         config,
         redact,
         signal,
+        sandbox,
+        loadSnapshotRef: () => this.readSnapshotRef(),
+        saveSnapshotRef: (ref) => this.writeSnapshotRef(ref),
         log: (stream, line) => this.appendLog(record.id, stream, line),
         setStatus: (status) => {
           const current = this.load(record.id);
@@ -315,6 +329,32 @@ export class TaskManager extends DurableObject<Env> {
         body.slice(i, i + ARTIFACT_CHUNK)
       );
     }
+  }
+
+  /**
+   * Workspace-cache handle.
+   *
+   * Stored here rather than in R2 so the runner never touches a
+   * provider-specific store; the ref itself stays opaque to us.
+   */
+  private readSnapshotRef(): SnapshotRef | null {
+    const row = this.sql
+      .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'workspaceSnapshot'")
+      .toArray()[0];
+    if (!row) return null;
+    try {
+      return JSON.parse(row.value) as SnapshotRef;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeSnapshotRef(ref: SnapshotRef): void {
+    this.sql.exec(
+      `INSERT INTO meta (key, value) VALUES ('workspaceSnapshot', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      JSON.stringify(ref)
+    );
   }
 
   private pruneOldTasks(): void {

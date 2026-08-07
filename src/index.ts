@@ -1,6 +1,6 @@
-import { getSandbox } from '@cloudflare/sandbox';
 import { ACP_PROTOCOL_VERSION } from './acp';
 import { loadConfig } from './config';
+import { getSandboxProvider } from './providers';
 import { createRedactor, patternOnlyRedactor } from './redact';
 import { shellQuote } from './runner';
 import type { Env, TaskRequest } from './types';
@@ -199,13 +199,13 @@ async function probeClaudeAuth(env: Env): Promise<Response> {
     );
   }
 
-  const sandbox = getSandbox(env.Sandbox, 'health-auth', { sleepAfter: '1m', enableDefaultSession: false });
+  const sandbox = await getSandboxProvider(env).create('health-auth', { sleepAfter: '1m' });
   try {
     const probe = await sandbox.exec(
       `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; claude -p ${shellQuote('Reply with exactly: OK')}`,
       {
         cwd: '/workspace',
-        timeout: 120_000,
+        timeoutMs: 120_000,
         env: {
           ANTHROPIC_API_KEY: undefined,
           ANTHROPIC_AUTH_TOKEN: undefined,

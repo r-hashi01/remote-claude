@@ -27,6 +27,8 @@ export interface Env {
   R2_SECRET_ACCESS_KEY?: string;
 
   // --- Vars ---
+  /** Which SandboxProvider implementation to use. Defaults to "cloudflare". */
+  SANDBOX_PROVIDER?: string;
   REPO_URL: string;
   DEFAULT_BASE_BRANCH: string;
   CLAUDE_AUTH_MODE?: string;

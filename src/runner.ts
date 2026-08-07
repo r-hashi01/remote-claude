@@ -1,5 +1,5 @@
-import { getSandbox } from '@cloudflare/sandbox';
 import type { Config } from './config';
+import type { SandboxSession, SnapshotRef } from './providers';
 import type { Redactor } from './redact';
 import type { Env, StepResult, TaskRecord, TaskResult, TaskStatus } from './types';
 
@@ -15,7 +15,7 @@ const MAX_PATCH_BYTES = 1_000_000;
 export const MAX_PROMPT_LENGTH = 20_000;
 
 const EXTRA_SYSTEM_PROMPT = [
-  'You are running non-interactively inside an isolated Cloudflare Sandbox,',
+  'You are running non-interactively inside an isolated cloud sandbox,',
   'on a dedicated branch of a checked-out git repository.',
   'Apply every change needed to satisfy the request directly to the files.',
   'Do NOT run `git commit`, `git push`, or any command that rewrites history —',
@@ -40,8 +40,6 @@ function truncate(text: string, limit: number): string {
   return `${text.slice(0, limit)}\n… [truncated, ${text.length - limit} more characters]`;
 }
 
-type Sandbox = ReturnType<typeof getSandbox>;
-
 export interface TaskRunOutcome {
   result: TaskResult;
   /** Full unified diff of baseBranch..HEAD, redacted and size-capped. */
@@ -55,10 +53,18 @@ export interface RunnerDeps {
   signal: AbortSignal;
   log: (stream: 'system' | 'stdout' | 'stderr', line: string) => void;
   setStatus: (status: TaskStatus) => void;
+  /** Already-created sandbox for this task. The caller owns provider choice. */
+  sandbox: SandboxSession;
+  /**
+   * Workspace-cache handle persistence. Kept as callbacks so the runner never
+   * needs to know where refs are stored (today: the Durable Object's SQLite).
+   */
+  loadSnapshotRef: () => SnapshotRef | null;
+  saveSnapshotRef: (ref: SnapshotRef) => void;
 }
 
 export async function runTask(task: TaskRecord, deps: RunnerDeps): Promise<TaskRunOutcome> {
-  const { env, config, redact, signal, log, setStatus } = deps;
+  const { env, config, redact, signal, log, setStatus, sandbox } = deps;
 
   const throwIfCancelled = () => {
     if (signal.aborted) throw new TaskCancelledError();
@@ -70,16 +76,11 @@ export async function runTask(task: TaskRecord, deps: RunnerDeps): Promise<TaskR
   log('system', `base branch ${task.baseBranch} → work branch ${task.branch}`);
   log('system', `claude auth mode: ${config.claudeAuthMode}`);
 
-  const sandbox = getSandbox(env.Sandbox, `rc-${task.id}`, {
-    sleepAfter: config.sleepAfter,
-    enableDefaultSession: false,
-  });
-
   // Killing in-flight processes is how cancellation reaches into the container:
   // the pending exec() then returns with a non-zero exit code.
   const onAbort = () => {
     log('system', 'cancellation requested — killing sandbox processes');
-    void sandbox.killAllProcesses().catch(() => {});
+    void sandbox.killAll().catch(() => {});
   };
   signal.addEventListener('abort', onAbort, { once: true });
 
@@ -106,8 +107,7 @@ export async function runTask(task: TaskRecord, deps: RunnerDeps): Promise<TaskR
     const exec = sandbox.exec(command, {
       cwd: options.cwd ?? REPO_DIR,
       env: options.env,
-      timeout: options.timeout,
-      stream: true,
+      timeoutMs: options.timeout,
       onOutput: (stream, data) => {
         const clean = redact(data);
         chunks.push(clean);
@@ -264,7 +264,12 @@ type RunFn = (
 ) => Promise<StepResult>;
 
 /** Fresh clone, or restore-then-refresh when the workspace cache is on. */
-async function prepareRepo(sandbox: Sandbox, task: TaskRecord, deps: RunnerDeps, run: RunFn): Promise<void> {
+async function prepareRepo(
+  sandbox: SandboxSession,
+  task: TaskRecord,
+  deps: RunnerDeps,
+  run: RunFn
+): Promise<void> {
   const { config, log, redact } = deps;
   const base = task.baseBranch;
 
@@ -282,44 +287,35 @@ async function prepareRepo(sandbox: Sandbox, task: TaskRecord, deps: RunnerDeps,
   }
 
   log('system', `cloning ${redact(task.repo)} (${base})`);
-  await sandbox.gitCheckout(task.repo, { branch: base, targetDir: REPO_DIR });
+  await sandbox.cloneRepository(task.repo, { branch: base, targetDir: REPO_DIR });
   log('system', 'clone complete');
 }
 
-async function createWorkspaceSnapshot(sandbox: Sandbox, deps: RunnerDeps): Promise<void> {
-  const { env, config, log, redact } = deps;
-  if (!env.BACKUP_BUCKET) {
-    log('system', 'workspace cache is on but no BACKUP_BUCKET binding — skipping snapshot');
+async function createWorkspaceSnapshot(sandbox: SandboxSession, deps: RunnerDeps): Promise<void> {
+  const { config, log } = deps;
+
+  const ref = await sandbox.snapshot({
+    dir: '/workspace',
+    name: 'remote-claude-workspace',
+    ttlSeconds: config.workspaceCacheTtl,
+    respectGitignore: true,
+  });
+
+  if (!ref) {
+    // The provider reports unavailability by returning null rather than
+    // throwing, because a missing cache must never fail the task.
+    log('system', 'workspace snapshot unavailable — continuing without a cache');
     return;
   }
-  try {
-    const backup = await sandbox.createBackup({
-      dir: '/workspace',
-      name: 'remote-claude-workspace',
-      ttl: config.workspaceCacheTtl,
-      gitignore: true,
-    });
-    await env.BACKUP_BUCKET.put('cache/workspace.json', JSON.stringify(backup));
-    log('system', `workspace snapshot stored (ttl ${config.workspaceCacheTtl}s)`);
-  } catch (error) {
-    // A cache miss must never fail the task.
-    log('system', `workspace snapshot failed (non-fatal): ${redact(String(error))}`);
-  }
+
+  deps.saveSnapshotRef(ref);
+  log('system', `workspace snapshot stored (ttl ${config.workspaceCacheTtl}s)`);
 }
 
-async function restoreWorkspaceSnapshot(sandbox: Sandbox, deps: RunnerDeps): Promise<boolean> {
-  const { env, log, redact } = deps;
-  if (!env.BACKUP_BUCKET) return false;
-  try {
-    const object = await env.BACKUP_BUCKET.get('cache/workspace.json');
-    if (!object) return false;
-    const handle = JSON.parse(await object.text()) as { id: string; dir: string };
-    const result = await sandbox.restoreBackup(handle);
-    return result.success;
-  } catch (error) {
-    log('system', `workspace restore failed (non-fatal): ${redact(String(error))}`);
-    return false;
-  }
+async function restoreWorkspaceSnapshot(sandbox: SandboxSession, deps: RunnerDeps): Promise<boolean> {
+  const ref = deps.loadSnapshotRef();
+  if (!ref) return false;
+  return sandbox.restore(ref);
 }
 
 async function runClaude(task: TaskRecord, deps: RunnerDeps, run: RunFn): Promise<StepResult> {
