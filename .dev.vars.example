@@ -1,0 +1,28 @@
+# Copy to `.dev.vars` for local `wrangler dev`. NEVER commit `.dev.vars`.
+# It is covered by the repository .gitignore - verify with:
+#   git check-ignore -v infra/remote-claude/.dev.vars
+
+# Long-lived Claude subscription OAuth token.
+# Generate locally with:  claude setup-token
+CLAUDE_CODE_OAUTH_TOKEN=
+
+# Shared bearer token that guards this Worker's HTTP API.
+# Generate with:  openssl rand -hex 32
+REMOTE_CLAUDE_TOKEN=
+
+# GitHub App used to clone/push the repository (README "GitHub App を用意する").
+# GITHUB_APP_PRIVATE_KEY must be PKCS#8 ("-----BEGIN PRIVATE KEY-----"). GitHub
+# issues PKCS#1 keys, so convert once with:
+#   openssl pkcs8 -topk8 -nocrypt -in original-key.pem -out pkcs8-key.pem
+# Paste the pkcs8-key.pem contents below with real newlines, or "\n"-escaped
+# on a single line.
+GITHUB_APP_ID=
+GITHUB_APP_PRIVATE_KEY=
+GITHUB_APP_INSTALLATION_ID=
+
+# Only needed when WORKSPACE_CACHE=on
+# R2_ACCESS_KEY_ID=
+# R2_SECRET_ACCESS_KEY=
+
+# NOTE: ANTHROPIC_API_KEY is deliberately absent and must never be set here.
+# This environment authenticates with a Claude subscription via OAuth only.

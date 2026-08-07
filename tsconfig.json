@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022"],
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "types": ["./worker-configuration.d.ts", "node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "worker-configuration.d.ts"],
+  // Tests run through Node's native type stripping, which needs explicit `.ts`
+  // import specifiers that tsc rejects under this config.
+  "exclude": ["node_modules", "cli", "src/**/*.test.ts"]
+}
