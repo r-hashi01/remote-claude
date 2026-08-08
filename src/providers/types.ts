@@ -73,6 +73,12 @@ export interface SandboxSession {
    */
   cloneRepository(repoUrl: string, options: CloneOptions): Promise<void>;
 
+  /** Write a file, creating parent directories as needed. */
+  writeFile(path: string, content: string): Promise<void>;
+
+  /** Read a file. Returns null when it does not exist. */
+  readFile(path: string): Promise<string | null>;
+
   /** Terminate every running process, leaving the sandbox itself alive. */
   killAll(): Promise<void>;
 

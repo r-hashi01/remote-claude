@@ -76,6 +76,22 @@ class CloudflareSandboxSession implements SandboxSession {
     });
   }
 
+  async writeFile(path: string, content: string): Promise<void> {
+    await this.sandbox.writeFile(path, content);
+  }
+
+  async readFile(path: string): Promise<string | null> {
+    try {
+      const file = await this.sandbox.readFile(path);
+      // The SDK returns either the text or an object wrapping it depending on
+      // options; normalise so callers only ever see a string.
+      return typeof file === 'string' ? file : ((file as { content?: string })?.content ?? null);
+    } catch {
+      // Missing file. The poller treats absence as "not written yet".
+      return null;
+    }
+  }
+
   async killAll(): Promise<void> {
     await this.sandbox.killAllProcesses();
   }
