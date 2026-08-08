@@ -2,7 +2,7 @@ import { ACP_PROTOCOL_VERSION } from './acp';
 import { loadConfig } from './config';
 import { getSandboxProvider } from './providers';
 import { createRedactor, patternOnlyRedactor } from './redact';
-import { shellQuote } from './runner';
+import { shellQuote } from './shell';
 import type { Env, JobRequest } from './types';
 
 // Durable Object classes referenced from wrangler.jsonc.

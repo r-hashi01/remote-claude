@@ -9,7 +9,7 @@ import {
 } from './acp';
 import { loadConfig, type Config } from './config';
 import { createRedactor, type Redactor } from './redact';
-import { shellQuote } from './runner';
+import { shellQuote } from './shell';
 import type { Env } from './types';
 
 const REPO_DIR = '/workspace/repo';

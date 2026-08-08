@@ -109,6 +109,10 @@ export interface JobRecord {
   error?: string;
   /** Set once the sandbox has been reclaimed. Drives the orphan sweep. */
   sandboxDestroyed?: boolean;
+  /** Highest log sequence mirrored from the container runner so far. */
+  logSeq?: number;
+  /** Launch attempts so far. Only the pre-runner window is ever retried. */
+  attempts?: number;
   result?: JobResult;
   options: {
     skipChecks: boolean;

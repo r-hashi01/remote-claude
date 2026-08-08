@@ -1,14 +1,48 @@
 import { DurableObject } from 'cloudflare:workers';
 import { loadConfig } from './config';
-import { getSandboxProvider, type SnapshotRef } from './providers';
+import { getSandboxProvider, type SandboxProvider, type SnapshotRef } from './providers';
 import { createRedactor, type Redactor } from './redact';
-import { MAX_PROMPT_LENGTH, runJob, JobCancelledError } from './runner';
+import { MAX_PROMPT_LENGTH } from './shell';
 import type { Env, JobRecord, JobRequest, JobResult, LogLine, SandboxLedger, SandboxLedgerEntry } from './types';
 
 const MAX_LOG_LINES = 20_000;
 /** Lines buffered before a write. Keeps storage calls off the hot output path. */
 const LOG_FLUSH_SIZE = 64;
+/**
+ * Rows per insert statement.
+ *
+ * The ceiling is 100 bound parameters per query, and each row binds five
+ * columns, so 20 rows is the maximum and 15 leaves headroom. Getting this
+ * wrong is not subtle but it is quiet: the insert throws
+ * "too many SQL variables" and the whole batch of log lines vanishes.
+ */
+const LOG_INSERT_CHUNK = 15;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** How often to mirror a running job's state files into this object. */
+const POLL_INTERVAL_MS = 2_000;
+/** Where the container runner keeps its state files. Contract with runner.mjs. */
+const STATE_DIR = '/workspace/.remote-claude';
+const REPO_DIR = '/workspace/repo';
+/**
+ * How many times to retry a job that failed before its runner started.
+ *
+ * Only that window is retryable: nothing has been executed yet, so a retry has
+ * no side effects. Once the runner is up, a retry would re-run the user's
+ * prompt, which is not the same thing at all.
+ */
+const MAX_LAUNCH_ATTEMPTS = 3;
+
+/**
+ * Errors that mean "the platform was busy", not "this job is broken".
+ *
+ * Observed twice in normal use: the sandbox runtime is updated underneath a
+ * running operation and it is interrupted mid-flight.
+ */
+function isTransientPlatformError(message: string): boolean {
+  return /updating the sandbox runtime|container unavailable|temporarily unavailable|503/i.test(
+    message
+  );
+}
 /**
  * Backstop interval for the orphan sweep.
  *
@@ -40,9 +74,10 @@ export class JobManager extends DurableObject<Env> {
   private readonly sql: SqlStorage;
   /** jobId → controller. Present only while a job is actually executing. */
   private readonly running = new Map<string, AbortController>();
-  private queue: string[] = [];
   private logSeq = new Map<string, number>();
   private pendingLogs = new Map<string, LogLine[]>();
+  /** Jobs adopted from a previous incarnation, pending a liveness check. */
+  private readonly recovered = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -107,16 +142,20 @@ export class JobManager extends DurableObject<Env> {
       // reclaim them, not five minutes later.
       await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS);
 
-      // All execution funnels through this single object, so anything still
-      // marked in flight at construction time did not survive the restart.
+      // Jobs in flight are NOT presumed dead any more.
+      //
+      // When the pipeline ran inside this object, an eviction really did kill
+      // the work, so marking it failed was honest. Since the pipeline moved
+      // into the container (ADR 0004) the runner survives a restart here, and
+      // failing those jobs was throwing away work that was still going. Adopt
+      // them instead; the first poll reads the container's own status and
+      // decides whether the runner is alive or never started.
       for (const row of this.sql
-        .exec<{ data: string }>("SELECT data FROM jobs WHERE status IN ('queued','starting','running')")
+        .exec<{ data: string }>("SELECT data FROM jobs WHERE status IN ('starting','running')")
         .toArray()) {
         const job = JSON.parse(row.data) as JobRecord;
-        job.status = 'failed';
-        job.error = 'interrupted: the worker restarted while this job was in flight';
-        job.finishedAt = Date.now();
-        this.persist(job);
+        this.running.set(job.id, new AbortController());
+        this.recovered.add(job.id);
       }
 
       // Deliberately not awaited inside blockConcurrencyWhile: reclaiming talks
@@ -163,8 +202,10 @@ export class JobManager extends DurableObject<Env> {
 
     this.prune();
     this.persist(job);
-    this.queue.push(id);
-    void this.drain();
+    // Return immediately. Starting a job clones the repository, which takes
+    // tens of seconds — doing that inside this request blocked the caller and
+    // risked the object being reset mid-clone. The alarm picks it up.
+    await this.ctx.storage.setAlarm(Date.now());
 
     return job;
   }
@@ -206,17 +247,16 @@ export class JobManager extends DurableObject<Env> {
     if (!job) return null;
 
     if (job.status === 'queued') {
-      this.queue = this.queue.filter((queued) => queued !== id);
       job.status = 'cancelled';
       job.finishedAt = Date.now();
       this.persist(job);
       this.appendLog(id, 'system', 'job cancelled before it started');
-      void this.drain();
       return job;
     }
 
     const controller = this.running.get(id);
     if (controller) {
+      // The next poll observes this, kills the container processes and settles.
       controller.abort();
       this.appendLog(id, 'system', 'cancellation signal sent');
       return this.load(id);
@@ -227,101 +267,317 @@ export class JobManager extends DurableObject<Env> {
 
   // ----------------------------------------------------------- scheduling
 
+  /**
+   * Start queued jobs up to the concurrency limit.
+   *
+   * The queue is read from storage rather than held in memory: an object that
+   * restarts would otherwise silently drop everything waiting.
+   */
   private async drain(): Promise<void> {
     const config = loadConfig(this.env);
-    while (this.running.size < config.maxConcurrency && this.queue.length > 0) {
-      const id = this.queue.shift();
-      if (!id) break;
-      const job = this.load(id);
-      if (!job || job.status !== 'queued') continue;
+
+    const queued = this.sql
+      .exec<{ data: string }>("SELECT data FROM jobs WHERE status = 'queued' ORDER BY created_at")
+      .toArray()
+      .map((row) => JSON.parse(row.data) as JobRecord);
+
+    for (const job of queued) {
+      if (this.running.size >= config.maxConcurrency) break;
+      if (this.running.has(job.id)) continue;
       await this.launch(job);
     }
   }
 
+  /**
+   * Start a job.
+   *
+   * Returns as soon as the container runner is running. The pipeline itself
+   * lives in the container (ADR 0004) — a Durable Object gets 30 seconds of CPU
+   * between requests and is evicted past that, which capped jobs at roughly 51
+   * seconds when the pipeline ran from here.
+   */
   private async launch(job: JobRecord): Promise<void> {
     const config = loadConfig(this.env);
-    const redact = createRedactor([
+    const controller = new AbortController();
+    this.running.set(job.id, controller);
+
+    job.status = 'starting';
+    job.startedAt = Date.now();
+    job.logSeq = 0;
+    this.persist(job);
+
+    try {
+      const sandboxId = `rc-${job.id}`;
+      this.sql.exec(
+        `INSERT INTO sandboxes (id, job_id, created_at) VALUES (?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET created_at = excluded.created_at, destroyed_at = NULL`,
+        sandboxId,
+        job.id,
+        Date.now()
+      );
+
+      const sandbox = await getSandboxProvider(this.env).create(sandboxId, {
+        sleepAfter: config.sleepAfter,
+      });
+
+      // Cloning stays on this side: it needs credentials injected outside the
+      // container, which is the whole point of ADR 0002.
+      this.appendLog(job.id, 'system', `cloning ${job.repo} (${job.baseBranch})`);
+      await sandbox.cloneRepository(job.repo, { branch: job.baseBranch, targetDir: REPO_DIR });
+
+      await sandbox.writeFile(
+        `${STATE_DIR}/job.json`,
+        JSON.stringify({
+          id: job.id,
+          prompt: job.prompt,
+          branch: job.branch,
+          baseBranch: job.baseBranch,
+          options: job.options,
+          commands: config.commands,
+          stepTimeoutMs: config.jobTimeoutMs,
+          claudeTimeoutMs: config.claudeTimeoutMs,
+        })
+      );
+
+      // setsid + nohup so the runner outlives the shell this exec spawned.
+      await sandbox.exec(
+        `mkdir -p ${STATE_DIR} && setsid nohup node /opt/remote-claude/runner.mjs ${STATE_DIR} ` +
+          `> ${STATE_DIR}/runner.out 2>&1 < /dev/null &`,
+        { cwd: '/workspace', env: containerEnvironment(this.env, config), timeoutMs: 30_000 }
+      );
+
+      job.status = 'running';
+      this.persist(job);
+      this.appendLog(job.id, 'system', 'runner started in container');
+      await this.ctx.storage.setAlarm(Date.now() + POLL_INTERVAL_MS);
+    } catch (error) {
+      const message = errorMessage(error);
+      const attempts = (job.attempts ?? 0) + 1;
+
+      // Safe to retry here and only here: the runner has not started, so
+      // nothing has run and re-running has no side effects.
+      if (isTransientPlatformError(message) && attempts < MAX_LAUNCH_ATTEMPTS) {
+        this.running.delete(job.id);
+        await this.teardown(job.id);
+
+        const current = this.load(job.id) ?? job;
+        current.status = 'queued';
+        current.attempts = attempts;
+        current.startedAt = undefined;
+        this.persist(current);
+        this.appendLog(
+          job.id,
+          'system',
+          `platform interrupted the start (attempt ${attempts}/${MAX_LAUNCH_ATTEMPTS}); requeued: ${message}`
+        );
+        await this.ctx.storage.setAlarm(Date.now() + POLL_INTERVAL_MS);
+        return;
+      }
+
+      await this.fail(job.id, message);
+    }
+  }
+
+  /**
+   * Read one running job's state files and mirror them into this object.
+   *
+   * Each alarm is a fresh invocation with a fresh CPU budget, which is what
+   * makes an arbitrarily long job survivable.
+   */
+  private async pollJob(jobId: string): Promise<void> {
+    const job = this.load(jobId);
+    if (!job || isTerminal(job.status)) {
+      this.running.delete(jobId);
+      return;
+    }
+
+    const config = loadConfig(this.env);
+    const controller = this.running.get(jobId);
+
+    if (controller?.signal.aborted) {
+      await this.stopContainer(jobId);
+      await this.settle(jobId, 'cancelled', 'cancelled by request');
+      return;
+    }
+
+    if (job.startedAt && Date.now() - job.startedAt > config.jobTimeoutMs) {
+      await this.stopContainer(jobId);
+      await this.settle(jobId, 'failed', `job exceeded ${config.jobTimeoutMs}ms`);
+      return;
+    }
+
+    const sandbox = await getSandboxProvider(this.env).create(`rc-${jobId}`);
+
+    // An adopted job may have been killed before its runner ever started.
+    // status.json is written by the runner, so its absence answers that.
+    if (this.recovered.delete(jobId)) {
+      const alive = await sandbox.readFile(`${STATE_DIR}/status.json`);
+      if (!alive) {
+        this.appendLog(jobId, 'system', 'worker restarted before the runner started; requeued');
+        this.running.delete(jobId);
+        await this.teardown(jobId);
+        const current = this.load(jobId);
+        if (current) {
+          current.status = 'queued';
+          current.startedAt = undefined;
+          current.logSeq = 0;
+          this.persist(current);
+        }
+        return;
+      }
+      this.appendLog(jobId, 'system', 'resumed after worker restart; runner still running');
+    }
+
+    // Mirroring must never decide whether a job can finish. It used to run
+    // before the status read with nothing catching it, so one failure in the
+    // log path left the job polling until it hit its timeout — a job lost to a
+    // problem with reporting on the job.
+    await this.tryMirrorLogs(jobId, sandbox);
+
+    const statusRaw = await sandbox.readFile(`${STATE_DIR}/status.json`);
+    const phase = statusRaw ? (JSON.parse(statusRaw) as { phase?: string }).phase : undefined;
+
+    if (phase === 'completed' || phase === 'failed') {
+      await this.finalize(jobId, sandbox, phase);
+    }
+  }
+
+  /** Mirror logs, surfacing any failure without letting it stall the job. */
+  private async tryMirrorLogs(
+    jobId: string,
+    sandbox: Awaited<ReturnType<SandboxProvider['create']>>
+  ): Promise<void> {
+    try {
+      await this.mirrorLogs(jobId, sandbox);
+    } catch (error) {
+      this.appendLog(jobId, 'system', `log mirroring failed: ${errorMessage(error)}`);
+      // Persist immediately: a buffered report of a logging failure is a
+      // report that disappears exactly when it is needed.
+      this.flushLogs(jobId);
+    }
+  }
+
+  /**
+   * Copy log lines written since the last poll into this object.
+   *
+   * Line numbers and seq numbers align: the runner writes one line per seq.
+   */
+  private async mirrorLogs(
+    jobId: string,
+    sandbox: Awaited<ReturnType<SandboxProvider['create']>>
+  ): Promise<void> {
+    const job = this.load(jobId);
+    if (!job) return;
+
+    const since = (job.logSeq ?? 0) + 1;
+    const tail = await sandbox.exec(`tail -n +${since} ${STATE_DIR}/log.ndjson 2>/dev/null || true`, {
+      timeoutMs: 20_000,
+    });
+
+    let highest = job.logSeq ?? 0;
+    for (const line of (tail.stdout ?? '').split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line) as { seq: number; stream: LogLine['stream']; line: string };
+        this.appendLog(jobId, entry.stream, entry.line);
+        highest = Math.max(highest, entry.seq);
+      } catch {
+        // A partially written final line; it arrives complete next poll.
+      }
+    }
+
+    // Flush within the poll rather than carrying a buffer across polls. The
+    // buffer is in-memory, and between two-second alarms this object is idle
+    // and may be evicted — anything still buffered would be lost, which is
+    // exactly how the tail of a job's log kept disappearing. Batching still
+    // pays off: one multi-row insert per poll instead of one per line.
+    this.flushLogs(jobId);
+
+    if (highest !== (job.logSeq ?? 0)) {
+      const current = this.load(jobId);
+      if (current) {
+        current.logSeq = highest;
+        this.persist(current);
+      }
+    }
+  }
+
+  /** Pull the runner's artifacts across and settle the job. */
+  private async finalize(
+    jobId: string,
+    sandbox: Awaited<ReturnType<SandboxProvider['create']>>,
+    phase: 'completed' | 'failed'
+  ): Promise<void> {
+    // Drain once more before settling. The runner can write its last lines
+    // between the poll's tail and its status read, and losing the tail of a log
+    // is exactly what previously made a failure look like it happened earlier
+    // than it did.
+    await this.tryMirrorLogs(jobId, sandbox);
+
+    const redact = this.redactor();
+    const resultRaw = await sandbox.readFile(`${STATE_DIR}/result.json`);
+    const patchRaw = (await sandbox.readFile(`${STATE_DIR}/patch.diff`)) ?? '';
+
+    // Second redaction layer. The container cannot do value-based redaction —
+    // it does not hold the secrets (ADR 0002) — so it happens here.
+    await this.env.ARTIFACTS.put(`jobs/${jobId}/patch.diff`, redact(patchRaw));
+
+    let result: JobResult | undefined;
+    let error: string | undefined;
+    if (resultRaw) {
+      const parsed = JSON.parse(redact(resultRaw)) as JobResult & { error?: string };
+      if (parsed.error) error = parsed.error;
+      else result = parsed;
+      await this.env.ARTIFACTS.put(`jobs/${jobId}/result.json`, redact(resultRaw));
+    }
+
+    await this.settle(jobId, phase === 'completed' ? 'completed' : 'failed', error, result);
+  }
+
+  private async settle(
+    jobId: string,
+    status: JobRecord['status'],
+    error?: string,
+    result?: JobResult
+  ): Promise<void> {
+    const job = this.load(jobId);
+    if (job && !isTerminal(job.status)) {
+      job.status = status;
+      job.finishedAt = Date.now();
+      if (error) job.error = this.redactor()(error);
+      if (result) job.result = result;
+      this.persist(job);
+      this.appendLog(jobId, 'system', `job ${status}${error ? `: ${job.error}` : ''}`);
+    }
+
+    this.flushLogs(jobId);
+    this.running.delete(jobId);
+    this.logSeq.delete(jobId);
+    if (!job?.options.keepSandbox) await this.teardown(jobId);
+    await this.drain();
+  }
+
+  private async fail(jobId: string, message: string): Promise<void> {
+    await this.settle(jobId, 'failed', message);
+  }
+
+  private async stopContainer(jobId: string): Promise<void> {
+    try {
+      const sandbox = await getSandboxProvider(this.env).create(`rc-${jobId}`);
+      await sandbox.killAll();
+    } catch {
+      // Nothing to stop.
+    }
+  }
+
+  private redactor(): Redactor {
+    return createRedactor([
       this.env.CLAUDE_CODE_OAUTH_TOKEN,
       this.env.GITHUB_APP_PRIVATE_KEY,
       this.env.REMOTE_CLAUDE_TOKEN,
       this.env.R2_ACCESS_KEY_ID,
       this.env.R2_SECRET_ACCESS_KEY,
     ]);
-
-    const controller = new AbortController();
-    this.running.set(job.id, controller);
-    const signal = anySignal([controller.signal, AbortSignal.timeout(config.jobTimeoutMs)]);
-
-    job.status = 'starting';
-    job.startedAt = Date.now();
-    this.persist(job);
-
-    this.ctx.waitUntil(this.execute(job, signal, controller, redact));
-  }
-
-  private async execute(
-    job: JobRecord,
-    signal: AbortSignal,
-    controller: AbortController,
-    redact: Redactor
-  ): Promise<void> {
-    const config = loadConfig(this.env);
-    const sandboxId = `rc-${job.id}`;
-    this.sql.exec(
-      `INSERT INTO sandboxes (id, job_id, created_at) VALUES (?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET created_at = excluded.created_at, destroyed_at = NULL`,
-      sandboxId,
-      job.id,
-      Date.now()
-    );
-    const sandbox = await getSandboxProvider(this.env).create(sandboxId, {
-      sleepAfter: config.sleepAfter,
-    });
-
-    try {
-      const outcome = await runJob(job, {
-        env: this.env,
-        config,
-        redact,
-        signal,
-        sandbox,
-        loadSnapshotRef: () => this.readSnapshotRef(),
-        saveSnapshotRef: (ref) => this.writeSnapshotRef(ref),
-        log: (stream, line) => this.appendLog(job.id, stream, line),
-        setStatus: (status) => {
-          const current = this.load(job.id);
-          if (!current || isTerminal(current.status)) return;
-          current.status = status;
-          this.persist(current);
-        },
-      });
-
-      await this.env.ARTIFACTS.put(`jobs/${job.id}/patch.diff`, outcome.patch);
-      await this.env.ARTIFACTS.put(`jobs/${job.id}/result.json`, JSON.stringify(outcome.result));
-
-      const final = this.load(job.id) ?? job;
-      final.status = controller.signal.aborted ? 'cancelled' : 'completed';
-      final.result = outcome.result;
-      final.finishedAt = Date.now();
-      this.persist(final);
-      this.appendLog(job.id, 'system', `job ${final.status}`);
-    } catch (error) {
-      const final = this.load(job.id) ?? job;
-      const cancelled = controller.signal.aborted || error instanceof JobCancelledError;
-      final.status = cancelled ? 'cancelled' : 'failed';
-      final.error = redact(cancelled ? 'cancelled by request' : errorMessage(error));
-      final.finishedAt = Date.now();
-      this.persist(final);
-      this.appendLog(job.id, 'system', `job ${final.status}: ${final.error}`);
-    } finally {
-      this.flushLogs(job.id);
-      this.running.delete(job.id);
-      this.logSeq.delete(job.id);
-      // The sandbox is created here, so it is destroyed here. Doing this
-      // inside the runner meant an evicted object leaked the container.
-      if (!job.options.keepSandbox) await this.teardown(job.id);
-      await this.drain();
-    }
   }
 
   // ---------------------------------------------------- sandbox lifecycle
@@ -412,11 +668,30 @@ export class JobManager extends DurableObject<Env> {
     }
   }
 
+  /**
+   * Drives everything periodic: mirroring running jobs, and reclaiming
+   * sandboxes. Each firing is a fresh invocation with a fresh CPU budget, which
+   * is what lets a job run arbitrarily long (ADR 0004).
+   */
   async alarm(): Promise<void> {
     try {
+      await this.drain();
+      for (const jobId of [...this.running.keys()]) {
+        try {
+          await this.pollJob(jobId);
+        } catch (error) {
+          // One unhealthy job must not stop the others or the sweep.
+          this.appendLog(jobId, 'system', `poll failed: ${errorMessage(error)}`);
+        }
+      }
       await this.sweepOrphans();
     } finally {
-      await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS);
+      // Poll fast while work is in flight or waiting, idle slowly otherwise.
+      const pending = this.sql
+        .exec<{ n: number }>("SELECT COUNT(*) AS n FROM jobs WHERE status = 'queued'")
+        .toArray()[0]?.n ?? 0;
+      const next = this.running.size > 0 || pending > 0 ? POLL_INTERVAL_MS : SWEEP_INTERVAL_MS;
+      await this.ctx.storage.setAlarm(Date.now() + next);
     }
   }
 
@@ -450,18 +725,34 @@ export class JobManager extends DurableObject<Env> {
     if (pending.length >= LOG_FLUSH_SIZE) this.flushLogs(jobId);
   }
 
-  /** Write buffered lines as one multi-row insert. Values stay bound. */
+  /**
+   * Write buffered lines.
+   *
+   * Chunked, because a single multi-row insert of everything buffered during
+   * `npm install` overruns SQLite's bound-parameter ceiling and throws — which
+   * silently ate most of a job's log. Values stay bound; only the placeholder
+   * count is built into the statement.
+   *
+   * Lines are dropped from the buffer only after their chunk lands, so a
+   * failure loses nothing.
+   */
   private flushLogs(jobId: string): void {
     const pending = this.pendingLogs.get(jobId);
     if (!pending || pending.length === 0) return;
-    this.pendingLogs.delete(jobId);
 
-    const placeholders = pending.map(() => '(?, ?, ?, ?, ?)').join(', ');
-    const params = pending.flatMap((entry) => [jobId, entry.seq, entry.ts, entry.stream, entry.line]);
-    this.sql.exec(
-      `INSERT OR REPLACE INTO logs (job_id, seq, ts, stream, line) VALUES ${placeholders}`,
-      ...params
-    );
+    while (pending.length > 0) {
+      const chunk = pending.slice(0, LOG_INSERT_CHUNK);
+      const placeholders = chunk.map(() => '(?, ?, ?, ?, ?)').join(', ');
+      const params = chunk.flatMap((entry) => [jobId, entry.seq, entry.ts, entry.stream, entry.line]);
+
+      this.sql.exec(
+        `INSERT OR REPLACE INTO logs (job_id, seq, ts, stream, line) VALUES ${placeholders}`,
+        ...params
+      );
+      pending.splice(0, chunk.length);
+    }
+
+    this.pendingLogs.delete(jobId);
   }
 
   private currentMaxSeq(jobId: string): number {
@@ -511,6 +802,28 @@ export class JobManager extends DurableObject<Env> {
 }
 
 // -------------------------------------------------------------- helpers
+
+/**
+ * Environment for the container runner.
+ *
+ * `undefined` unsets. The OAuth value is a sentinel in proxy mode — the real
+ * token is swapped in by the Worker's outbound handler and never enters the
+ * container (ADR 0002).
+ */
+function containerEnvironment(
+  env: Env,
+  config: ReturnType<typeof loadConfig>
+): Record<string, string | undefined> {
+  return {
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_AUTH_TOKEN: undefined,
+    ANTHROPIC_BASE_URL: undefined,
+    CLAUDE_CODE_OAUTH_TOKEN:
+      config.claudeAuthMode === 'proxy' ? 'proxy-injected' : env.CLAUDE_CODE_OAUTH_TOKEN,
+    IS_SANDBOX: '1',
+    CI: '1',
+  };
+}
 
 function isTerminal(status: JobRecord['status']): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
