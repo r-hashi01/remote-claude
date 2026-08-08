@@ -9,8 +9,15 @@ const MAX_LOG_LINES = 20_000;
 /** Lines buffered before a write. Keeps storage calls off the hot output path. */
 const LOG_FLUSH_SIZE = 64;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-/** How often to look for sandboxes whose job finished without tearing them down. */
-const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+/**
+ * Backstop interval for the orphan sweep.
+ *
+ * Short on purpose: orphans consume max_instances, so a leak blocks the queue
+ * rather than merely costing money, and Durable Object alarms are cheap. The
+ * primary reclaim path is not this timer anyway — it is the sweep on
+ * construction, which runs at exactly the moment orphans are created.
+ */
+const SWEEP_INTERVAL_MS = 60 * 1000;
 /** Grace period before reclaiming a sandbox a caller asked to keep. */
 const KEEP_GRACE_MS = 30 * 60 * 1000;
 
@@ -79,9 +86,10 @@ export class JobManager extends DurableObject<Env> {
         );
       `);
 
-      // Reclaim anything the previous incarnation left behind, then keep the
-      // sweep armed. This is the only thing standing between an evicted object
-      // and a permanently leaked container.
+      // Arm the backstop. The sweep itself runs below, after the job records
+      // have been reconciled — an object is constructed right after the
+      // eviction that orphaned those sandboxes, so this is the moment to
+      // reclaim them, not five minutes later.
       await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS);
 
       // All execution funnels through this single object, so anything still
@@ -95,6 +103,11 @@ export class JobManager extends DurableObject<Env> {
         job.finishedAt = Date.now();
         this.persist(job);
       }
+
+      // Deliberately not awaited inside blockConcurrencyWhile: reclaiming talks
+      // to the container platform and can be slow, and nothing should be unable
+      // to read a job list because a cleanup is in flight.
+      this.ctx.waitUntil(this.sweepOrphans());
     });
   }
 
