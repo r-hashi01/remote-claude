@@ -220,16 +220,11 @@ export async function runJob(task: JobRecord, deps: RunnerDeps): Promise<JobRunO
     return await collectResult(task, deps, run, steps, claudeStep.output);
   } finally {
     signal.removeEventListener('abort', onAbort);
-    if (task.options.keepSandbox) {
-      log('system', `sandbox kept alive (idles out after ${config.sleepAfter})`);
-    } else {
-      try {
-        await sandbox.destroy();
-        log('system', 'sandbox destroyed');
-      } catch (error) {
-        log('system', `sandbox destroy failed: ${redact(String(error))}`);
-      }
-    }
+    // Teardown is deliberately NOT done here. The caller creates the sandbox,
+    // so the caller destroys it — and only the caller can still do so when
+    // this function never returns because its Durable Object was evicted.
+    // Leaving it here produced orphaned containers that silently consumed the
+    // entire concurrency budget.
   }
 }
 

@@ -107,6 +107,8 @@ export interface JobRecord {
   finishedAt?: number;
   /** Present on status=failed. Redacted. */
   error?: string;
+  /** Set once the sandbox has been reclaimed. Drives the orphan sweep. */
+  sandboxDestroyed?: boolean;
   result?: JobResult;
   options: {
     skipChecks: boolean;

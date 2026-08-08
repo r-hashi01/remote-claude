@@ -38,4 +38,11 @@ ENV DISABLE_TELEMETRY=1 \
 # Per-task timeouts are still enforced by the Worker.
 ENV COMMAND_TIMEOUT_MS=1800000
 
+# --- in-container job runner ---------------------------------------------
+# The pipeline runs here rather than from the Durable Object: a DO gets 30
+# seconds of CPU between requests and is evicted past that, which capped jobs
+# at roughly 51 seconds. See docs/roadmap.md RC-1.
+COPY container/runner.mjs /opt/remote-claude/runner.mjs
+RUN chmod +x /opt/remote-claude/runner.mjs
+
 EXPOSE 3000

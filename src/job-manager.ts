@@ -9,6 +9,10 @@ const MAX_LOG_LINES = 20_000;
 /** Lines buffered before a write. Keeps storage calls off the hot output path. */
 const LOG_FLUSH_SIZE = 64;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** How often to look for sandboxes whose job finished without tearing them down. */
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+/** Grace period before reclaiming a sandbox a caller asked to keep. */
+const KEEP_GRACE_MS = 30 * 60 * 1000;
 
 /**
  * Execution coordinator.
@@ -74,6 +78,11 @@ export class JobManager extends DurableObject<Env> {
           value TEXT NOT NULL
         );
       `);
+
+      // Reclaim anything the previous incarnation left behind, then keep the
+      // sweep armed. This is the only thing standing between an evicted object
+      // and a permanently leaked container.
+      await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS);
 
       // All execution funnels through this single object, so anything still
       // marked in flight at construction time did not survive the restart.
@@ -272,7 +281,62 @@ export class JobManager extends DurableObject<Env> {
       this.flushLogs(job.id);
       this.running.delete(job.id);
       this.logSeq.delete(job.id);
+      // The sandbox is created here, so it is destroyed here. Doing this
+      // inside the runner meant an evicted object leaked the container.
+      if (!job.options.keepSandbox) await this.teardown(job.id);
       await this.drain();
+    }
+  }
+
+  // ---------------------------------------------------- sandbox lifecycle
+
+  /** Destroy a job's sandbox and record that it is gone. Never throws. */
+  private async teardown(jobId: string): Promise<void> {
+    try {
+      const sandbox = await getSandboxProvider(this.env).create(`rc-${jobId}`);
+      await sandbox.destroy();
+      this.appendLog(jobId, 'system', 'sandbox destroyed');
+    } catch {
+      // Already gone, or the platform is unavailable. The sweep retries.
+      return;
+    }
+    const job = this.load(jobId);
+    if (job) {
+      job.sandboxDestroyed = true;
+      this.persist(job);
+    }
+  }
+
+  /**
+   * Reclaim sandboxes whose job has finished but which were never torn down.
+   *
+   * Necessary because a Durable Object can be evicted mid-job, in which case
+   * execute() never reaches its finally block. Observed in practice: four
+   * failed jobs left three live containers, exactly filling max_instances and
+   * blocking the queue.
+   */
+  private async sweepOrphans(): Promise<void> {
+    const now = Date.now();
+    const jobs = await this.listJobs(100);
+
+    for (const job of jobs) {
+      if (!isTerminal(job.status)) continue;
+      if (job.sandboxDestroyed) continue;
+      if (this.running.has(job.id)) continue;
+
+      // "Keep" means keep for inspection, not keep forever.
+      const finished = job.finishedAt ?? job.createdAt;
+      if (job.options.keepSandbox && now - finished < KEEP_GRACE_MS) continue;
+
+      await this.teardown(job.id);
+    }
+  }
+
+  async alarm(): Promise<void> {
+    try {
+      await this.sweepOrphans();
+    } finally {
+      await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS);
     }
   }
 
