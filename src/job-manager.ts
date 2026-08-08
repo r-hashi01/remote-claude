@@ -10,7 +10,16 @@ import {
 } from './acp';
 import { RUNNER_SOURCE } from './runner-source';
 import { MAX_PROMPT_LENGTH } from './shell';
-import type { Env, JobRecord, JobRequest, JobResult, LogLine, SandboxLedger, SandboxLedgerEntry } from './types';
+import type {
+  Env,
+  JobRecord,
+  JobRequest,
+  JobResult,
+  JobSummary,
+  LogLine,
+  SandboxLedger,
+  SandboxLedgerEntry,
+} from './types';
 
 const MAX_LOG_LINES = 20_000;
 /** Lines buffered before a write. Keeps storage calls off the hot output path. */
@@ -57,6 +66,23 @@ const HEARTBEAT_TIMEOUT_MS = 90_000;
  * sequence number already is one. This only became usable once Claude's output
  * was streamed rather than buffered until the step finished; before that a
  * working job and a stuck job looked identical for minutes.
+ *
+ * Streaming did not make silence rare, though — it only made it meaningful
+ * between tool calls. *Within* one, nothing is emitted from the tool_use until
+ * its result, and `rm -rf node_modules && npm install` on a React Router
+ * toolchain runs well past this with no output at all. That took a real job
+ * with it, and the reflex was to widen the window — which would have bought
+ * nothing except a later false positive.
+ *
+ * The runner answers it properly instead: a step that has been quiet for a
+ * minute now says so (`STEP_SILENCE_NOTICE_MS`). A long install is no longer
+ * silent, so silence means the runner itself has stopped — which is the
+ * anomaly this rule was written for. The window can stay tight because it is
+ * finally measuring the right thing.
+ *
+ * One gap remains, and it is not on this side of the wire: nothing heartbeats
+ * during `launch()`, before the runner exists. That window is covered by
+ * re-reading the record after mirroring (see `pollJob`), not by this timeout.
  */
 const STALL_TIMEOUT_MS = 8 * 60 * 1000;
 
@@ -250,6 +276,17 @@ export class JobManager extends DurableObject<Env> {
       )
       .toArray()
       .map((row) => JSON.parse(row.data) as JobRecord);
+  }
+
+  /**
+   * The same list, without each job's captured step output.
+   *
+   * The dashboard polls this every few seconds. `listJobs` returns whole
+   * records — one real job's `result.steps` was 69 KB — so a twenty-row list
+   * shipped over a megabyte per refresh to render a status and a prompt.
+   */
+  async listJobSummaries(limit = 20): Promise<JobSummary[]> {
+    return (await this.listJobs(limit)).map(summarize);
   }
 
   async getLogs(id: string, since = 0, limit = 2000): Promise<LogLine[]> {
@@ -476,10 +513,20 @@ export class JobManager extends DurableObject<Env> {
       return;
     }
 
+    // Re-read before judging liveness. `job` above was loaded before mirroring,
+    // and mirroring is exactly what advances lastProgressAt — so the checks
+    // below would decide using a snapshot of the moment before the evidence
+    // arrived. That is not a race that needs a wide window to bite: the first
+    // poll after a slow launch mirrors everything the runner has produced so
+    // far and, reading the pre-mirror copy, concludes nothing has been produced
+    // at all. One job was killed by the very poll that collected its 444 lines
+    // of output.
+    const fresh = this.load(jobId) ?? job;
+
     // Alive but producing nothing for a long time. Distinct from a dead
     // runner, and reported as such — "stuck" and "gone" want different responses
     // from whoever reads this.
-    const progressed = job.lastProgressAt ?? job.startedAt ?? Date.now();
+    const progressed = fresh.lastProgressAt ?? fresh.startedAt ?? Date.now();
     if (Date.now() - progressed > STALL_TIMEOUT_MS) {
       await this.stopContainer(jobId);
       await this.settle(
@@ -493,7 +540,7 @@ export class JobManager extends DurableObject<Env> {
 
     // Presume death rather than wait out the job timeout. Reported with the
     // phase it died in, which is the first thing anyone will want to know.
-    const beat = status?.updatedAt ?? job.startedAt ?? Date.now();
+    const beat = status?.updatedAt ?? fresh.startedAt ?? Date.now();
     if (Date.now() - beat > HEARTBEAT_TIMEOUT_MS) {
       // The runner's own stdout/stderr is the only thing that can say why it
       // died. We were holding it the whole time and not reading it — knowing a
@@ -937,6 +984,23 @@ function containerEnvironment(
 
 function isTerminal(status: JobRecord['status']): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+/** Drop the step outputs; keep the fields a list actually renders. */
+function summarize(job: JobRecord): JobSummary {
+  const { result, ...rest } = job;
+  if (!result) return rest;
+  return {
+    ...rest,
+    result: {
+      changed: result.changed,
+      commitSha: result.commitSha,
+      branch: result.branch,
+      pushed: result.pushed,
+      diffStat: result.diffStat,
+      diffBytes: result.diffBytes,
+    },
+  };
 }
 
 function newJobId(): string {

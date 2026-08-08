@@ -142,6 +142,23 @@ function truncate(text, limit) {
 const steps = [];
 
 /**
+ * How long a step may produce nothing before the runner says so.
+ *
+ * The Worker kills a job whose log has been quiet for eight minutes. That rule
+ * was right that silence is suspicious and wrong about what silence meant: an
+ * `npm install`, or one long tool call inside `claude`, emits nothing for as
+ * long as it takes — and one of those took a job with it. Whether a step is
+ * still running is a fact this side has and the Worker does not, so say it
+ * rather than leaving the Worker to infer it from an absence.
+ *
+ * This does not weaken the stall rule, it corrects what the rule measures.
+ * Silence now means the runner itself has stopped, which is the anomaly the
+ * rule was written for. A step that hangs forever is still bounded by its own
+ * timeout and by the job's wall clock.
+ */
+const STEP_SILENCE_NOTICE_MS = 60_000;
+
+/**
  * Run one command, streaming its output into the log.
  *
  * Rejects on failure unless `allowFailure`, which mirrors the previous
@@ -165,7 +182,9 @@ function run(name, command, options = {}) {
 
     let output = '';
     let partial = '';
+    let lastOutputAt = startedAt;
     const capture = (stream) => (chunk) => {
+      lastOutputAt = Date.now();
       const text = chunk.toString();
       output += text;
 
@@ -190,8 +209,22 @@ function run(name, command, options = {}) {
       ? setTimeout(() => child.kill('SIGKILL'), options.timeoutMs)
       : null;
 
-    child.on('close', (code) => {
+    // Checked more often than it fires, so the notice lands close to the
+    // minute rather than up to a minute late.
+    const silenceNotice = setInterval(() => {
+      if (Date.now() - lastOutputAt < STEP_SILENCE_NOTICE_MS) return;
+      lastOutputAt = Date.now();
+      log('system', `⋯ ${name} still running (${Math.round((Date.now() - startedAt) / 1000)}s, no output yet)`);
+    }, 15_000);
+    silenceNotice.unref();
+
+    const settle = () => {
       if (timer) clearTimeout(timer);
+      clearInterval(silenceNotice);
+    };
+
+    child.on('close', (code) => {
+      settle();
       const step = {
         name,
         command: redact(command),
@@ -211,7 +244,7 @@ function run(name, command, options = {}) {
     });
 
     child.on('error', (error) => {
-      if (timer) clearTimeout(timer);
+      settle();
       reject(error);
     });
   });

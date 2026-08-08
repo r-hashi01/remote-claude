@@ -130,6 +130,25 @@
     // worth remembering whenever the target repo is restructured.
     // `ci` rather than `install`: install rewrites package-lock.json, and that
     // churn then shows up in the job's diff as changes nobody asked for.
+    //
+    // These want to be root-level and package-agnostic:
+    //
+    //   "INSTALL_COMMAND": "npm ci --no-audit --no-fund",
+    //   "LINT_COMMAND": "npm run typecheck",
+    //
+    // Naming packages/spindle-core meant that when apps/web arrived the
+    // pipeline stopped checking the new code and said nothing — a job passed
+    // lint with a typecheck that was broken in a fresh checkout.
+    //
+    // They are not switched yet, because these run against what GitHub has,
+    // not what is on anyone's disk. spindle's workspace root — the root
+    // package.json and the lockfile moved up from packages/spindle-core — is
+    // still uncommitted locally. `npm ci` with no root package.json exits
+    // non-zero, and install is not allowFailure, so every job would die before
+    // reaching the agent.
+    //
+    // Switch both lines the moment that lands on origin/main. Nothing else
+    // needs to change.
     "INSTALL_COMMAND": "npm --prefix packages/spindle-core ci --no-audit --no-fund",
     "LINT_COMMAND": "npm --prefix packages/spindle-core run typecheck",
     // spindle has no test suite yet; typecheck above is the only gate.

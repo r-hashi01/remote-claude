@@ -57,7 +57,13 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   if (path === '/jobs' && method === 'GET') {
     const limit = Number.parseInt(url.searchParams.get('limit') ?? '20', 10);
-    return Response.json({ tasks: await jobs.listJobs(limit) });
+    // `summary=1` omits each job's captured step output — kilobytes per row
+    // that a list never renders. The CLI keeps the full shape it expects.
+    const tasks =
+      url.searchParams.get('summary') === '1'
+        ? await jobs.listJobSummaries(limit)
+        : await jobs.listJobs(limit);
+    return Response.json({ tasks });
   }
 
   // What this deployment has allocated and whether it got it back. Exists

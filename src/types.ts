@@ -133,6 +133,18 @@ export interface JobRecord {
   };
 }
 
+/**
+ * A job without the bulk — everything a list view needs and nothing it does not.
+ *
+ * `JobResult.steps` carries every step's captured output, which for one real
+ * job was 69 KB. Twenty of those is a megabyte and a half per refresh, for a
+ * list that displays none of it. The prompt stays in full: knowing what was
+ * asked is the whole point of looking.
+ */
+export type JobSummary = Omit<JobRecord, 'result'> & {
+  result?: Pick<JobResult, 'changed' | 'commitSha' | 'branch' | 'pushed' | 'diffStat' | 'diffBytes'>;
+};
+
 /** What a job consumed. Produced by Claude Code and previously discarded. */
 export interface JobUsage {
   inputTokens: number;

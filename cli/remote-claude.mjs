@@ -10,7 +10,9 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 
 // The CLI is repository-agnostic: it acts on wherever you invoke it from.
 const REPO_ROOT = process.cwd();
@@ -25,6 +27,7 @@ remote-claude — run Claude Code on Cloudflare, not on your Mac
   remote-claude diff <job-id>          print the unified diff
   remote-claude apply <job-id>         apply that diff to the local worktree
   remote-claude cancel <job-id>        cancel a running job
+  remote-claude ui [--port N]           open the dashboard (local, no login)
   remote-claude list                    list recent jobs
   remote-claude sandboxes               show what is allocated and not reclaimed
   remote-claude health [--auth]         check the worker (and Claude auth)
@@ -212,6 +215,90 @@ async function cmdLogs(config, args) {
   return 0;
 }
 
+/**
+ * Serve the dashboard on loopback and proxy its API calls, adding the token.
+ *
+ * The page used to be served by the Worker, which is what created the problem
+ * it then spent three designs failing to solve: a page on the public internet
+ * has to prove to the Worker who it is, and a browser only volunteers a
+ * credential under rules that are easy to get wrong and impossible to check
+ * from outside a browser. A cookie handshake failed on a redirect, then failed
+ * again on SameSite, while curl and a headless browser both said it worked.
+ *
+ * None of that applies here. Whoever wants to watch a job is at the machine
+ * that started it, and the token is already in that machine's config file.
+ * The browser talks to 127.0.0.1; this process attaches the token on the way
+ * out. No cookie, no login, no session, and nothing new reachable from the
+ * internet.
+ *
+ * Bound to 127.0.0.1 rather than 0.0.0.0, deliberately: anything that can
+ * reach this port can use the token without holding it, so the port must not
+ * leave the machine.
+ */
+async function cmdUi(config, args) {
+  const opts = parseArgs(args, { flags: ['no-open'], values: ['port'] });
+  const port = Number.parseInt(opts.port ?? '7878', 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) fail(`invalid port: ${opts.port}`);
+
+  const page = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'dashboard.html'));
+
+  const server = createServer((req, res) => {
+    const path = (req.url ?? '/').split('#')[0];
+
+    if (path === '/' || path.startsWith('/?')) {
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(page);
+      return;
+    }
+
+    // Read-only, matching what the page does. A local port is not a licence to
+    // start jobs from a web page that happens to be pointed at it.
+    if (req.method !== 'GET') {
+      res.writeHead(405, { 'content-type': 'application/json' });
+      res.end('{"error":"the dashboard is read-only"}');
+      return;
+    }
+
+    fetch(`${config.url}${path}`, { headers: { authorization: `Bearer ${config.token}` } })
+      .then(async (upstream) => {
+        const body = Buffer.from(await upstream.arrayBuffer());
+        res.writeHead(upstream.status, {
+          'content-type': upstream.headers.get('content-type') ?? 'application/octet-stream',
+          'cache-control': 'no-store',
+        });
+        res.end(body);
+      })
+      .catch((error) => {
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: `cannot reach ${config.url}: ${error.message}` }));
+      });
+  });
+
+  server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') fail(`port ${port} is in use — try --port ${port + 1}`);
+    fail(error.message);
+  });
+
+  await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
+
+  const url = `http://127.0.0.1:${port}/`;
+  log(`dashboard   ${url}`);
+  log(`upstream    ${config.url}`);
+  log('');
+  log('Ctrl-C to stop.');
+
+  if (!opts['no-open']) {
+    spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
+  }
+
+  // Hold the process open; the server is the whole command.
+  await new Promise(() => {});
+  return 0;
+}
+
 async function cmdDiff(config, args) {
   const id = requireId(args);
   const patch = await api(config, `/jobs/${id}/diff`, { raw: true });
@@ -388,6 +475,7 @@ const COMMANDS = {
   run: cmdRun,
   status: cmdStatus,
   logs: cmdLogs,
+  ui: cmdUi,
   diff: cmdDiff,
   apply: cmdApply,
   cancel: cmdCancel,
