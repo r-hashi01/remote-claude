@@ -121,7 +121,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
 
     if (suffix === '/diff' && method === 'GET') {
-      const patch = await tasks.getArtifact(id, 'patch');
+      const patch = await tasks.getPatch(id);
       if (patch === null) return notFound();
       return new Response(patch, {
         headers: { 'content-type': 'text/x-patch; charset=utf-8' },

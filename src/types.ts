@@ -9,6 +9,11 @@ export interface Env {
   /** One Durable Object per interactive ACP session. */
   ACP: DurableObjectNamespace<AgentSession>;
 
+  /** Domain state: Project / Task / Event / Update / Output / SandboxRun. */
+  DB: D1Database;
+  /** Output bodies (patches, log archives). Only keys are stored in D1. */
+  ARTIFACTS: R2Bucket;
+
   // --- Optional R2 binding (WORKSPACE_CACHE=on) ---
   BACKUP_BUCKET?: R2Bucket;
 
@@ -49,7 +54,12 @@ export interface Env {
   BACKUP_BUCKET_NAME?: string;
 }
 
-export type TaskStatus =
+/**
+ * Execution lifecycle, distinct from the work status in store/types.ts.
+ * A task's *work* status (to_do / ready_for_review / ...) is a projection
+ * derived from execution outcomes; this is the execution itself.
+ */
+export type ExecutionStatus =
   | 'queued'
   | 'starting'
   | 'running'
@@ -81,24 +91,43 @@ export interface TaskRequest {
   push?: boolean;
 }
 
+/**
+ * Input contract for the runner. Built from the durable Task in D1 — this is
+ * not itself persisted anywhere.
+ */
 export interface TaskRecord {
   id: string;
-  status: TaskStatus;
+  status: ExecutionStatus;
   prompt: string;
   repo: string;
   baseBranch: string;
   branch: string;
   createdAt: number;
-  startedAt?: number;
-  finishedAt?: number;
-  /** Present on status=failed. Redacted. */
-  error?: string;
-  result?: TaskResult;
   options: {
     skipChecks: boolean;
     keepSandbox: boolean;
     push: boolean;
   };
+}
+
+/** What the HTTP API and CLI see for a task. */
+export interface TaskView {
+  id: string;
+  title: string;
+  prompt: string;
+  /** Work status: to_do | in_progress | waiting | ready_for_review | done | failed */
+  status: string;
+  statusReason: string | null;
+  branch: string | null;
+  baseBranch: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /**
+   * True once nothing further will happen without a new request. Computed
+   * server-side so clients never have to know the status vocabulary.
+   */
+  settled: boolean;
+  result?: TaskResult;
 }
 
 export interface TaskResult {

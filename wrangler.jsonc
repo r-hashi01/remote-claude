@@ -39,6 +39,15 @@
     }
   ],
 
+  // Output bodies (patches, log archives). D1 has a 2 MB row limit and these
+  // grow without bound, so only the R2 key is stored in the database.
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "spindle-artifacts"
+    }
+  ],
+
   "durable_objects": {
     "bindings": [
       { "class_name": "Sandbox", "name": "Sandbox" },

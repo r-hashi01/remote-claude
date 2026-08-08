@@ -3,22 +3,30 @@ import { loadConfig } from './config';
 import { getSandboxProvider, type SnapshotRef } from './providers';
 import { createRedactor, type Redactor } from './redact';
 import { MAX_PROMPT_LENGTH, runTask, TaskCancelledError } from './runner';
-import type { Env, LogLine, TaskRecord, TaskRequest, TaskStatus } from './types';
+import { ensureDefaultProject } from './store/bootstrap';
+import { createD1Store } from './store/d1';
+import type { SpindleStore, Task, TaskStatus } from './store/types';
+import type { Env, LogLine, TaskRecord, TaskRequest, TaskResult, TaskView } from './types';
 
 /** Storage bound per task so a runaway job cannot fill the Durable Object. */
 const MAX_LOG_LINES = 20_000;
-const ARTIFACT_CHUNK = 64 * 1024;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Single coordinator Durable Object.
+ * Execution coordinator.
  *
- * One object holds every task record, its logs and its artifacts, and owns the
- * concurrency gate. Using exactly one object is what makes the concurrency
- * counter trivially correct — there is no distributed state to reconcile.
+ * Split of responsibility (docs/spindle-data-model-v0.1.md):
+ *   D1  — durable domain state (tasks, sandbox runs, outputs)
+ *   R2  — output bodies (patch, result JSON), which outgrow D1's 2 MB row cap
+ *   DO  — live execution only: the concurrency gate, in-flight abort handles,
+ *         and streaming logs
+ *
+ * Exactly one instance of this object exists, which is what makes the
+ * concurrency counter trivially correct.
  */
 export class TaskManager extends DurableObject<Env> {
   private readonly sql: SqlStorage;
+  private readonly store: SpindleStore;
   /** taskId → controller. Present only while a task is actually executing. */
   private readonly running = new Map<string, AbortController>();
   private queue: string[] = [];
@@ -27,15 +35,10 @@ export class TaskManager extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.store = createD1Store(env.DB);
 
     ctx.blockConcurrencyWhile(async () => {
       this.sql.exec(`
-        CREATE TABLE IF NOT EXISTS tasks (
-          id         TEXT PRIMARY KEY,
-          created_at INTEGER NOT NULL,
-          status     TEXT NOT NULL,
-          data       TEXT NOT NULL
-        );
         CREATE TABLE IF NOT EXISTS logs (
           task_id TEXT NOT NULL,
           seq     INTEGER NOT NULL,
@@ -44,13 +47,6 @@ export class TaskManager extends DurableObject<Env> {
           line    TEXT NOT NULL,
           PRIMARY KEY (task_id, seq)
         );
-        CREATE TABLE IF NOT EXISTS artifacts (
-          task_id TEXT NOT NULL,
-          name    TEXT NOT NULL,
-          chunk   INTEGER NOT NULL,
-          body    TEXT NOT NULL,
-          PRIMARY KEY (task_id, name, chunk)
-        );
         CREATE TABLE IF NOT EXISTS meta (
           key   TEXT PRIMARY KEY,
           value TEXT NOT NULL
@@ -58,28 +54,24 @@ export class TaskManager extends DurableObject<Env> {
       `);
 
       // A Durable Object can be evicted mid-flight (deploy, restart, crash).
-      // Anything still marked in-flight at construction time did not survive,
-      // so report that honestly instead of leaving it "running" forever.
-      const stale = this.sql
-        .exec<{ id: string; data: string }>(
-          "SELECT id, data FROM tasks WHERE status IN ('queued','starting','running')"
-        )
-        .toArray();
-      for (const row of stale) {
-        const record = JSON.parse(row.data) as TaskRecord;
-        record.status = 'failed';
-        record.error = 'interrupted: the worker restarted while this task was in flight';
-        record.finishedAt = Date.now();
-        this.persist(record);
+      // All execution funnels through this single object, so anything still
+      // marked in-flight did not survive. Report that rather than leaving a
+      // task "in progress" forever.
+      //
+      // Guarded: this runs inside blockConcurrencyWhile, so a transient D1
+      // failure here would otherwise prevent the object from ever starting
+      // and take the entire task system down with it.
+      try {
+        await this.failInterruptedTasks();
+      } catch {
+        // Recovered on the next construction; not worth failing startup for.
       }
     });
   }
 
-  // ------------------------------------------------------------------
-  // RPC surface
-  // ------------------------------------------------------------------
+  // ------------------------------------------------------------------ RPC
 
-  async createTask(request: TaskRequest): Promise<TaskRecord> {
+  async createTask(request: TaskRequest): Promise<TaskView> {
     const config = loadConfig(this.env);
 
     const prompt = (request.prompt ?? '').trim();
@@ -87,118 +79,105 @@ export class TaskManager extends DurableObject<Env> {
     if (prompt.length > MAX_PROMPT_LENGTH) {
       throw new Error(`prompt exceeds ${MAX_PROMPT_LENGTH} characters`);
     }
-
-    let repo = config.repoUrl;
-    if (request.repo && request.repo !== config.repoUrl) {
-      if (!config.allowCustomRepo) {
-        throw new Error('custom repositories are disabled (set ALLOW_CUSTOM_REPO=true to allow)');
-      }
-      repo = assertSafeRepoUrl(request.repo);
+    if (request.repo && request.repo !== config.repoUrl && !config.allowCustomRepo) {
+      throw new Error('custom repositories are disabled (set ALLOW_CUSTOM_REPO=true to allow)');
     }
 
     const baseBranch = sanitizeRef(request.baseBranch || config.defaultBaseBranch);
-    const id = newTaskId();
+    const { project, repository } = await ensureDefaultProject(this.store, config);
 
-    const record: TaskRecord = {
-      id,
-      status: 'queued',
-      prompt,
-      repo,
+    const task = await this.store.tasks.create({
+      projectId: project.id,
+      repositoryId: repository.id,
+      title: firstLine(prompt),
+      intent: prompt,
+      status: 'to_do',
+      statusReason: 'queued for execution',
       baseBranch,
-      branch: `claude/${id}`,
-      createdAt: Date.now(),
-      options: {
-        skipChecks: request.skipChecks === true,
-        keepSandbox: request.keepSandbox === true,
-        push: request.push === true,
-      },
-    };
+      originKind: 'manual',
+    });
 
-    this.pruneOldTasks();
-    this.persist(record);
-    this.queue.push(id);
-    this.drain();
+    // The branch is derived from the id, so it can only be set after insert.
+    const withBranch = (await this.store.tasks.patch(task.id, {
+      branch: `claude/${task.id}`,
+    })) ?? task;
 
-    return this.load(id) ?? record;
+    await this.recordOptions(task.id, request);
+    this.pruneOldLogs();
+    this.queue.push(task.id);
+    void this.drain();
+
+    return this.toView(withBranch);
   }
 
-  async getTask(id: string): Promise<TaskRecord | null> {
-    return this.load(id);
+  async getTask(taskId: string): Promise<TaskView | null> {
+    const task = await this.store.tasks.get(taskId);
+    return task ? this.toView(task) : null;
   }
 
-  async listTasks(limit = 20): Promise<TaskRecord[]> {
-    return this.sql
-      .exec<{ data: string }>(
-        'SELECT data FROM tasks ORDER BY created_at DESC LIMIT ?',
-        Math.min(Math.max(limit, 1), 100)
-      )
-      .toArray()
-      .map((row) => JSON.parse(row.data) as TaskRecord);
+  async listTasks(limit = 20): Promise<TaskView[]> {
+    const tasks = await this.store.tasks.listRecent(Math.min(Math.max(limit, 1), 100));
+    return Promise.all(tasks.map((task) => this.toView(task)));
   }
 
-  async getLogs(id: string, since = 0, limit = 2000): Promise<LogLine[]> {
+  async getLogs(taskId: string, since = 0, limit = 2000): Promise<LogLine[]> {
     return this.sql
       .exec<LogLine>(
         'SELECT seq, ts, stream, line FROM logs WHERE task_id = ? AND seq > ? ORDER BY seq LIMIT ?',
-        id,
+        taskId,
         since,
         Math.min(Math.max(limit, 1), 5000)
       )
       .toArray();
   }
 
-  async getArtifact(id: string, name: string): Promise<string | null> {
-    const rows = this.sql
-      .exec<{ body: string }>(
-        'SELECT body FROM artifacts WHERE task_id = ? AND name = ? ORDER BY chunk',
-        id,
-        name
-      )
-      .toArray();
-    if (rows.length === 0) return null;
-    return rows.map((r) => r.body).join('');
+  /** Unified diff, fetched from R2 via the recorded output. */
+  async getPatch(taskId: string): Promise<string | null> {
+    const outputs = await this.store.outputs.listByTask(taskId);
+    const patch = outputs.find((output) => output.kind === 'patch');
+    if (!patch?.storageKey) return null;
+    const object = await this.env.ARTIFACTS.get(patch.storageKey);
+    return object ? object.text() : null;
   }
 
-  async cancelTask(id: string): Promise<TaskRecord | null> {
-    const record = this.load(id);
-    if (!record) return null;
+  async cancelTask(taskId: string): Promise<TaskView | null> {
+    const task = await this.store.tasks.get(taskId);
+    if (!task) return null;
 
-    if (record.status === 'queued') {
-      this.queue = this.queue.filter((queued) => queued !== id);
-      record.status = 'cancelled';
-      record.finishedAt = Date.now();
-      this.persist(record);
-      this.appendLog(id, 'system', 'task cancelled before it started');
-      this.drain();
-      return record;
-    }
-
-    const controller = this.running.get(id);
+    const controller = this.running.get(taskId);
     if (controller) {
       controller.abort();
-      this.appendLog(id, 'system', 'cancellation signal sent');
-      return this.load(id);
+      this.appendLog(taskId, 'system', 'cancellation signal sent');
+      return this.toView(task);
     }
 
-    return record; // already finished
+    if (this.queue.includes(taskId)) {
+      this.queue = this.queue.filter((queued) => queued !== taskId);
+      // Cancelling returns the work to "not started" rather than marking it
+      // failed: nothing went wrong, it simply has not been done.
+      const updated = await this.setStatus(taskId, 'to_do', 'cancelled before it started');
+      this.appendLog(taskId, 'system', 'task cancelled before it started');
+      void this.drain();
+      return updated ? this.toView(updated) : null;
+    }
+
+    return this.toView(task); // already settled
   }
 
-  // ------------------------------------------------------------------
-  // Scheduling
-  // ------------------------------------------------------------------
+  // ----------------------------------------------------------- scheduling
 
-  private drain(): void {
+  private async drain(): Promise<void> {
     const config = loadConfig(this.env);
     while (this.running.size < config.maxConcurrency && this.queue.length > 0) {
-      const id = this.queue.shift();
-      if (!id) break;
-      const record = this.load(id);
-      if (!record || record.status !== 'queued') continue;
-      this.launch(record);
+      const taskId = this.queue.shift();
+      if (!taskId) break;
+      const task = await this.store.tasks.get(taskId);
+      if (!task || task.status !== 'to_do') continue;
+      await this.launch(task);
     }
   }
 
-  private launch(record: TaskRecord): void {
+  private async launch(task: Task): Promise<void> {
     const config = loadConfig(this.env);
     const redact = createRedactor([
       this.env.CLAUDE_CODE_OAUTH_TOKEN,
@@ -209,35 +188,40 @@ export class TaskManager extends DurableObject<Env> {
     ]);
 
     const controller = new AbortController();
-    this.running.set(record.id, controller);
-
+    this.running.set(task.id, controller);
     const signal = anySignal([controller.signal, AbortSignal.timeout(config.taskTimeoutMs)]);
 
-    record.status = 'starting';
-    record.startedAt = Date.now();
-    this.persist(record);
+    await this.setStatus(task.id, 'in_progress', 'sandbox starting');
 
-    const work = this.execute(record, signal, controller, redact);
+    const provider = getSandboxProvider(this.env);
+    const run = await this.store.sandboxRuns.create({
+      taskId: task.id,
+      provider: provider.name,
+      status: 'creating',
+      executor: 'claude-code',
+    });
+
     // Keeps the Durable Object alive for the duration of the task.
-    this.ctx.waitUntil(work);
+    this.ctx.waitUntil(this.execute(task, run.id, signal, controller, redact));
   }
 
   private async execute(
-    record: TaskRecord,
+    task: Task,
+    runId: string,
     signal: AbortSignal,
     controller: AbortController,
     redact: Redactor
   ): Promise<void> {
     const config = loadConfig(this.env);
+    const options = this.readOptions(task.id);
 
-    // Provider choice lives here, not in the runner: task execution must stay
-    // independent of which backend actually runs the sandbox (requirements 6.4).
-    const sandbox = await getSandboxProvider(this.env).create(`rc-${record.id}`, {
+    const sandbox = await getSandboxProvider(this.env).create(`rc-${task.id}`, {
       sleepAfter: config.sleepAfter,
     });
+    await this.store.sandboxRuns.patch(runId, { status: 'running', startedAt: Date.now() });
 
     try {
-      const outcome = await runTask(record, {
+      const outcome = await runTask(this.toRunnerRecord(task, config, options), {
         env: this.env,
         config,
         redact,
@@ -245,55 +229,190 @@ export class TaskManager extends DurableObject<Env> {
         sandbox,
         loadSnapshotRef: () => this.readSnapshotRef(),
         saveSnapshotRef: (ref) => this.writeSnapshotRef(ref),
-        log: (stream, line) => this.appendLog(record.id, stream, line),
-        setStatus: (status) => {
-          const current = this.load(record.id);
-          if (!current || isTerminal(current.status)) return;
-          current.status = status;
-          this.persist(current);
-        },
+        log: (stream, line) => this.appendLog(task.id, stream, line),
+        // The runner reports execution lifecycle; the work-status projection
+        // is derived here, not taken verbatim.
+        setStatus: () => {},
       });
 
-      this.storeArtifact(record.id, 'patch', outcome.patch);
+      await this.persistOutcome(task, runId, outcome.result, outcome.patch);
 
-      const final = this.load(record.id) ?? record;
-      final.status = controller.signal.aborted ? 'cancelled' : 'completed';
-      final.result = outcome.result;
-      final.finishedAt = Date.now();
-      this.persist(final);
-      this.appendLog(record.id, 'system', `task ${final.status}`);
+      const cancelled = controller.signal.aborted;
+      const [status, reason] = cancelled
+        ? (['to_do', 'cancelled by request'] as const)
+        : outcome.result.changed
+          ? (['ready_for_review', 'changes ready to review'] as const)
+          : (['done', 'completed with no file changes'] as const);
+
+      await this.setStatus(task.id, status, reason);
+      await this.store.sandboxRuns.patch(runId, {
+        status: cancelled ? 'stopped' : 'destroyed',
+        endedAt: Date.now(),
+        headCommit: outcome.result.commitSha ?? null,
+      });
+      this.appendLog(task.id, 'system', `task ${status}`);
     } catch (error) {
-      const final = this.load(record.id) ?? record;
       const cancelled = controller.signal.aborted || error instanceof TaskCancelledError;
-      final.status = cancelled ? 'cancelled' : 'failed';
-      final.error = redact(cancelled ? 'cancelled by request' : errorMessage(error));
-      final.finishedAt = Date.now();
-      this.persist(final);
-      this.appendLog(record.id, 'system', `task ${final.status}: ${final.error}`);
+      const message = redact(cancelled ? 'cancelled by request' : errorMessage(error));
+
+      await this.setStatus(task.id, cancelled ? 'to_do' : 'failed', message);
+      await this.store.sandboxRuns.patch(runId, { status: 'failed', endedAt: Date.now() });
+      this.appendLog(task.id, 'system', `task ${cancelled ? 'cancelled' : 'failed'}: ${message}`);
     } finally {
-      this.running.delete(record.id);
-      this.logSeq.delete(record.id);
-      this.drain();
+      this.running.delete(task.id);
+      this.logSeq.delete(task.id);
+      await this.drain();
     }
   }
 
-  // ------------------------------------------------------------------
-  // Storage helpers
-  // ------------------------------------------------------------------
+  /** Patch and execution result become durable Outputs backed by R2. */
+  private async persistOutcome(
+    task: Task,
+    runId: string,
+    result: TaskResult,
+    patch: string
+  ): Promise<void> {
+    if (patch.trim()) {
+      const key = `tasks/${task.id}/patch.diff`;
+      await this.env.ARTIFACTS.put(key, patch);
+      await this.store.outputs.create({
+        projectId: task.projectId,
+        taskId: task.id,
+        kind: 'patch',
+        title: `Patch for ${task.title}`,
+        status: result.changed ? 'ready' : 'empty',
+        storageKey: key,
+        producedBy: 'agent:claude-code',
+        metadata: { diffStat: result.diffStat, commitSha: result.commitSha ?? null },
+      });
+    }
 
-  private load(id: string): TaskRecord | null {
-    const row = this.sql.exec<{ data: string }>('SELECT data FROM tasks WHERE id = ?', id).toArray()[0];
-    return row ? (JSON.parse(row.data) as TaskRecord) : null;
+    const resultKey = `tasks/${task.id}/result.json`;
+    await this.env.ARTIFACTS.put(resultKey, JSON.stringify(result));
+    await this.store.sandboxRuns.patch(runId, { logKey: resultKey });
+
+    const checks = result.steps.filter((step) => ['lint', 'test', 'build'].includes(step.name));
+    if (checks.some((step) => !step.skipped)) {
+      await this.store.outputs.create({
+        projectId: task.projectId,
+        taskId: task.id,
+        kind: 'test_result',
+        title: `Checks for ${task.title}`,
+        status: checks.every((step) => step.success) ? 'passed' : 'failed',
+        storageKey: resultKey,
+        producedBy: 'agent:claude-code',
+        metadata: { checks: checks.map((s) => ({ name: s.name, success: s.success, skipped: s.skipped })) },
+      });
+    }
   }
 
-  private persist(record: TaskRecord): void {
+  // ------------------------------------------------------------ projection
+
+  private async setStatus(
+    taskId: string,
+    status: TaskStatus,
+    reason: string
+  ): Promise<Task | null> {
+    return this.store.tasks.patch(taskId, {
+      status,
+      statusReason: reason,
+      ...(status === 'done' || status === 'failed' ? { closedAt: Date.now() } : {}),
+    });
+  }
+
+  private async toView(task: Task): Promise<TaskView> {
+    const settled = task.status !== 'in_progress' && !this.running.has(task.id) && !this.queue.includes(task.id);
+    const view: TaskView = {
+      id: task.id,
+      title: task.title,
+      prompt: task.intent ?? task.title,
+      status: task.status,
+      statusReason: task.statusReason,
+      branch: task.branch,
+      baseBranch: task.baseBranch,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      settled,
+    };
+
+    const object = await this.env.ARTIFACTS.get(`tasks/${task.id}/result.json`);
+    if (object) view.result = JSON.parse(await object.text()) as TaskResult;
+    return view;
+  }
+
+  private toRunnerRecord(task: Task, config: ReturnType<typeof loadConfig>, options: TaskRecord['options']): TaskRecord {
+    return {
+      id: task.id,
+      status: 'running',
+      prompt: task.intent ?? task.title,
+      repo: config.repoUrl,
+      baseBranch: task.baseBranch ?? config.defaultBaseBranch,
+      branch: task.branch ?? `claude/${task.id}`,
+      createdAt: task.createdAt,
+      options,
+    };
+  }
+
+  private async failInterruptedTasks(): Promise<void> {
+    const stale = await this.store.tasks.listRecent(100);
+    for (const task of stale) {
+      if (task.status !== 'in_progress') continue;
+      await this.store.tasks.patch(task.id, {
+        status: 'failed',
+        statusReason: 'interrupted: the worker restarted while this task was in flight',
+        closedAt: Date.now(),
+      });
+    }
+  }
+
+  // --------------------------------------------------------- DO-local state
+
+  /** Per-task execution options. Ephemeral: only meaningful while running. */
+  private recordOptions(taskId: string, request: TaskRequest): void {
+    this.writeMeta(
+      `options:${taskId}`,
+      JSON.stringify({
+        skipChecks: request.skipChecks === true,
+        keepSandbox: request.keepSandbox === true,
+        push: request.push === true,
+      })
+    );
+  }
+
+  private readOptions(taskId: string): TaskRecord['options'] {
+    const raw = this.readMeta(`options:${taskId}`);
+    if (!raw) return { skipChecks: false, keepSandbox: false, push: false };
+    try {
+      return JSON.parse(raw) as TaskRecord['options'];
+    } catch {
+      return { skipChecks: false, keepSandbox: false, push: false };
+    }
+  }
+
+  private readSnapshotRef(): SnapshotRef | null {
+    const raw = this.readMeta('workspaceSnapshot');
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as SnapshotRef;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeSnapshotRef(ref: SnapshotRef): void {
+    this.writeMeta('workspaceSnapshot', JSON.stringify(ref));
+  }
+
+  private readMeta(key: string): string | null {
+    const row = this.sql.exec<{ value: string }>('SELECT value FROM meta WHERE key = ?', key).toArray()[0];
+    return row?.value ?? null;
+  }
+
+  private writeMeta(key: string, value: string): void {
     this.sql.exec(
-      `INSERT INTO tasks (id, created_at, status, data) VALUES (?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET status = excluded.status, data = excluded.data`,
-      record.id,
-      record.createdAt,
-      record.status,
-      JSON.stringify(record)
+      'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      key,
+      value
     );
   }
 
@@ -318,76 +437,20 @@ export class TaskManager extends DurableObject<Env> {
     return row?.max_seq ?? 0;
   }
 
-  private storeArtifact(taskId: string, name: string, body: string): void {
-    this.sql.exec('DELETE FROM artifacts WHERE task_id = ? AND name = ?', taskId, name);
-    for (let i = 0, chunk = 0; i < body.length; i += ARTIFACT_CHUNK, chunk += 1) {
-      this.sql.exec(
-        'INSERT INTO artifacts (task_id, name, chunk, body) VALUES (?, ?, ?, ?)',
-        taskId,
-        name,
-        chunk,
-        body.slice(i, i + ARTIFACT_CHUNK)
-      );
-    }
-  }
-
-  /**
-   * Workspace-cache handle.
-   *
-   * Stored here rather than in R2 so the runner never touches a
-   * provider-specific store; the ref itself stays opaque to us.
-   */
-  private readSnapshotRef(): SnapshotRef | null {
-    const row = this.sql
-      .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'workspaceSnapshot'")
-      .toArray()[0];
-    if (!row) return null;
-    try {
-      return JSON.parse(row.value) as SnapshotRef;
-    } catch {
-      return null;
-    }
-  }
-
-  private writeSnapshotRef(ref: SnapshotRef): void {
-    this.sql.exec(
-      `INSERT INTO meta (key, value) VALUES ('workspaceSnapshot', ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      JSON.stringify(ref)
-    );
-  }
-
-  private pruneOldTasks(): void {
-    const cutoff = Date.now() - RETENTION_MS;
-    const doomed = this.sql
-      .exec<{ id: string }>('SELECT id FROM tasks WHERE created_at < ?', cutoff)
-      .toArray();
-    for (const { id } of doomed) {
-      if (this.running.has(id)) continue;
-      this.sql.exec('DELETE FROM logs WHERE task_id = ?', id);
-      this.sql.exec('DELETE FROM artifacts WHERE task_id = ?', id);
-      this.sql.exec('DELETE FROM tasks WHERE id = ?', id);
-    }
+  /** Logs are DO-local and unbounded otherwise; domain state is pruned in D1. */
+  private pruneOldLogs(): void {
+    this.sql.exec('DELETE FROM logs WHERE ts < ?', Date.now() - RETENTION_MS);
   }
 }
 
-// --------------------------------------------------------------------
-// Pure helpers
-// --------------------------------------------------------------------
+// -------------------------------------------------------------- helpers
 
-function isTerminal(status: TaskStatus): boolean {
-  return status === 'completed' || status === 'failed' || status === 'cancelled';
-}
-
-function newTaskId(): string {
-  const time = Date.now().toString(36);
-  const random = crypto.randomUUID().replace(/-/g, '').slice(0, 8);
-  return `${time}-${random}`;
+function firstLine(text: string): string {
+  return text.split('\n')[0].slice(0, 120);
 }
 
 function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** `AbortSignal.any` with a manual fallback for older runtimes. */
@@ -411,18 +474,4 @@ export function sanitizeRef(ref: string): string {
     throw new Error(`invalid branch name: ${trimmed}`);
   }
   return trimmed;
-}
-
-/** Only https GitHub URLs, and never one carrying inline credentials. */
-export function assertSafeRepoUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error('repo must be an absolute https URL');
-  }
-  if (url.protocol !== 'https:') throw new Error('repo must use https');
-  if (url.username || url.password) throw new Error('repo URL must not embed credentials');
-  if (url.hostname !== 'github.com') throw new Error('repo must be hosted on github.com');
-  return url.toString();
 }

@@ -43,7 +43,8 @@ Configuration (first match wins):
   file ~/.config/remote-claude/config.json
 `.trim();
 
-const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+/** Statuses that mean the work succeeded. Everything else is a non-zero exit. */
+const SUCCESS = new Set(['ready_for_review', 'done']);
 
 // ---------------------------------------------------------------- config
 
@@ -145,7 +146,7 @@ async function cmdRun(config, args) {
   if (!opts.json) printSummary(final, created.taskId);
   else process.stdout.write(JSON.stringify(final) + '\n');
 
-  return final.status === 'completed' ? 0 : 1;
+  return SUCCESS.has(final.status) ? 0 : 1;
 }
 
 async function follow(config, id, echo) {
@@ -161,7 +162,9 @@ async function follow(config, id, echo) {
     }
 
     const task = await api(config, `/tasks/${id}`);
-    if (TERMINAL.has(task.status)) {
+    // `settled` is computed server-side so the CLI never has to track the
+    // work-status vocabulary.
+    if (task.settled) {
       // Drain anything written between the two calls.
       const tail = await api(config, `/tasks/${id}/logs?since=${since}`);
       if (echo) for (const entry of tail.logs) process.stdout.write('  ' + entry.line + '\n');
@@ -179,7 +182,7 @@ async function cmdStatus(config, args) {
     return 0;
   }
   printSummary(task, id);
-  return TERMINAL.has(task.status) && task.status !== 'completed' ? 1 : 0;
+  return task.settled && !SUCCESS.has(task.status) ? 1 : 0;
 }
 
 async function cmdLogs(config, args) {
@@ -267,7 +270,7 @@ async function cmdHealth(config, args) {
 function printSummary(task, id) {
   log('');
   log(`status   ${task.status}`);
-  if (task.error) log(`error    ${task.error}`);
+  if (task.statusReason) log(`reason   ${task.statusReason}`);
   const result = task.result;
   if (!result) {
     log(`(no result yet — remote-claude logs ${id})`);

@@ -1,7 +1,7 @@
 import type { Config } from './config';
 import type { SandboxSession, SnapshotRef } from './providers';
 import type { Redactor } from './redact';
-import type { Env, StepResult, TaskRecord, TaskResult, TaskStatus } from './types';
+import type { Env, ExecutionStatus, StepResult, TaskRecord, TaskResult } from './types';
 
 const REPO_DIR = '/workspace/repo';
 const GIT_USER_NAME = 'remote-claude';
@@ -52,7 +52,7 @@ export interface RunnerDeps {
   redact: Redactor;
   signal: AbortSignal;
   log: (stream: 'system' | 'stdout' | 'stderr', line: string) => void;
-  setStatus: (status: TaskStatus) => void;
+  setStatus: (status: ExecutionStatus) => void;
   /** Already-created sandbox for this task. The caller owns provider choice. */
   sandbox: SandboxSession;
   /**
