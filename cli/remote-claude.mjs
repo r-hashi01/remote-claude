@@ -9,7 +9,7 @@
 
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 
 // The CLI is repository-agnostic: it acts on wherever you invoke it from.
@@ -46,14 +46,31 @@ const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 
 // ---------------------------------------------------------------- config
 
-function loadConfig() {
-  const candidates = [
-    join(REPO_ROOT, '.remote-claude.json'),
-    join(homedir(), '.config', 'remote-claude', 'config.json'),
-  ];
+/**
+ * Where to look for `url` and `token`, in order:
+ *   1. the current directory and every parent, so a repository can pin its own
+ *   2. ~/.config/remote-claude/config.json
+ *
+ * The walk upwards matters because the CLI acts on whatever repository you are
+ * standing in, and you are rarely standing exactly at its root. The global file
+ * is the normal place for these: they identify a deployment, not a repository.
+ */
+function configCandidates() {
+  const paths = [];
+  let dir = process.cwd();
+  for (;;) {
+    paths.push(join(dir, '.remote-claude.json'));
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  paths.push(join(homedir(), '.config', 'remote-claude', 'config.json'));
+  return paths;
+}
 
+function loadConfig() {
   let fromFile = {};
-  for (const path of candidates) {
+  for (const path of configCandidates()) {
     try {
       fromFile = JSON.parse(readFileSync(path, 'utf8'));
       break;
@@ -68,9 +85,11 @@ function loadConfig() {
   if (!url || !token) {
     fail(
       'missing configuration.\n\n' +
-        'Set REMOTE_CLAUDE_URL and REMOTE_CLAUDE_TOKEN, or create .remote-claude.json:\n' +
+        'Set REMOTE_CLAUDE_URL and REMOTE_CLAUDE_TOKEN, or create\n' +
+        '  ~/.config/remote-claude/config.json\n' +
         '  { "url": "https://remote-claude.<subdomain>.workers.dev", "token": "<REMOTE_CLAUDE_TOKEN>" }\n\n' +
-        'That file is gitignored. Never commit the token.'
+        'A .remote-claude.json in the current directory or any parent takes\n' +
+        'precedence. Never commit the token; keep the file mode at 600.'
     );
   }
   return { url: url.replace(/\/+$/, ''), token };

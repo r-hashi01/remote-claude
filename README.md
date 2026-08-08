@@ -247,7 +247,23 @@ GitHub Actions Secretsに入れておいて `sync-remote-claude-secrets` workflo
 
 ### 5. ローカルCLIの接続先を設定
 
-repo rootに `.remote-claude.json` を作る（gitignore済み）。
+設定は**デプロイ単位のもので、リポジトリ単位ではない**ため、既定はグローバルに置く。
+
+```bash
+mkdir -p ~/.config/remote-claude
+cat > ~/.config/remote-claude/config.json <<'JSON'
+{
+  "url": "https://remote-claude.<your-subdomain>.workers.dev",
+  "token": "<REMOTE_CLAUDE_TOKEN と同じ値>"
+}
+JSON
+chmod 600 ~/.config/remote-claude/config.json
+```
+
+探索順は「カレントディレクトリとその親を遡って `.remote-claude.json`」→
+「`~/.config/remote-claude/config.json`」。特定のリポジトリだけ別のデプロイへ
+向けたい場合は前者を置く。環境変数 `REMOTE_CLAUDE_URL` / `REMOTE_CLAUDE_TOKEN`
+が最優先。
 
 ```json
 {
