@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { loadConfig } from './config';
 import { getSandboxProvider, type SandboxProvider, type SnapshotRef } from './providers';
 import { createRedactor, type Redactor } from './redact';
+import { RUNNER_SOURCE } from './runner-source';
 import { MAX_PROMPT_LENGTH } from './shell';
 import type { Env, JobRecord, JobRequest, JobResult, LogLine, SandboxLedger, SandboxLedgerEntry } from './types';
 
@@ -31,6 +32,16 @@ const REPO_DIR = '/workspace/repo';
  * prompt, which is not the same thing at all.
  */
 const MAX_LAUNCH_ATTEMPTS = 3;
+
+/**
+ * How long without a heartbeat before the runner is presumed dead.
+ *
+ * The runner touches status.json every five seconds. Generous relative to that
+ * so a slow poll or a busy container is not mistaken for a corpse, but far
+ * short of the job timeout — which used to be the only thing that noticed, and
+ * took thirty minutes to do it.
+ */
+const HEARTBEAT_TIMEOUT_MS = 90_000;
 
 /**
  * Errors that mean "the platform was busy", not "this job is broken".
@@ -339,9 +350,13 @@ export class JobManager extends DurableObject<Env> {
         })
       );
 
+      // Ship the runner with the job rather than relying on the image. One
+      // artifact, so no drift.
+      await sandbox.writeFile(`${STATE_DIR}/runner.mjs`, RUNNER_SOURCE);
+
       // setsid + nohup so the runner outlives the shell this exec spawned.
       await sandbox.exec(
-        `mkdir -p ${STATE_DIR} && setsid nohup node /opt/remote-claude/runner.mjs ${STATE_DIR} ` +
+        `mkdir -p ${STATE_DIR} && setsid nohup node ${STATE_DIR}/runner.mjs ${STATE_DIR} ` +
           `> ${STATE_DIR}/runner.out 2>&1 < /dev/null &`,
         { cwd: '/workspace', env: containerEnvironment(this.env, config), timeoutMs: 30_000 }
       );
@@ -435,10 +450,33 @@ export class JobManager extends DurableObject<Env> {
     await this.tryMirrorLogs(jobId, sandbox);
 
     const statusRaw = await sandbox.readFile(`${STATE_DIR}/status.json`);
-    const phase = statusRaw ? (JSON.parse(statusRaw) as { phase?: string }).phase : undefined;
+    const status = statusRaw
+      ? (JSON.parse(statusRaw) as { phase?: string; updatedAt?: number })
+      : undefined;
 
-    if (phase === 'completed' || phase === 'failed') {
-      await this.finalize(jobId, sandbox, phase);
+    if (status?.phase === 'completed' || status?.phase === 'failed') {
+      await this.finalize(jobId, sandbox, status.phase);
+      return;
+    }
+
+    // Presume death rather than wait out the job timeout. Reported with the
+    // phase it died in, which is the first thing anyone will want to know.
+    const beat = status?.updatedAt ?? job.startedAt ?? Date.now();
+    if (Date.now() - beat > HEARTBEAT_TIMEOUT_MS) {
+      // The runner's own stdout/stderr is the only thing that can say why it
+      // died. We were holding it the whole time and not reading it — knowing a
+      // great deal about the runner's internals while failing to report the one
+      // thing anyone needs.
+      const output = (await sandbox.readFile(`${STATE_DIR}/runner.out`))?.trim();
+      const detail = output ? `\nrunner output:\n${output.slice(-2000)}` : ' (runner produced no output)';
+
+      await this.stopContainer(jobId);
+      await this.settle(
+        jobId,
+        'failed',
+        `runner stopped responding during "${status?.phase ?? 'startup'}" ` +
+          `(no heartbeat for ${Math.round((Date.now() - beat) / 1000)}s).${detail}`
+      );
     }
   }
 

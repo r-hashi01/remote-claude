@@ -9,7 +9,10 @@
     "dev": "wrangler dev",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
-    "test": "node src/acp.test.ts"
+    "test": "node src/acp.test.ts",
+    "embed": "node scripts/embed-runner.mjs",
+    "predeploy": "node scripts/embed-runner.mjs",
+    "pretypecheck": "node scripts/embed-runner.mjs"
   },
   "devDependencies": {
     "@cloudflare/sandbox": "^0.12.4",

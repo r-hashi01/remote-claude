@@ -85,9 +85,31 @@ function log(stream, line) {
   );
 }
 
-function setStatus(phase, extra = {}) {
-  write('status.json', { phase, seq: logSeq, updatedAt: Date.now(), ...extra });
+let currentPhase = 'starting';
+let currentExtra = {};
+
+function writeStatus() {
+  write('status.json', { phase: currentPhase, seq: logSeq, updatedAt: Date.now(), ...currentExtra });
 }
+
+function setStatus(phase, extra = {}) {
+  currentPhase = phase;
+  currentExtra = extra;
+  writeStatus();
+}
+
+/**
+ * Heartbeat.
+ *
+ * Phases can last minutes — `claude-code` routinely does — so a status file
+ * that only moves on transitions cannot distinguish "working" from "dead". The
+ * Worker's only other recourse was the job's wall-clock timeout, which meant a
+ * runner that died silently held the job for thirty minutes.
+ *
+ * unref'd so it never keeps the process alive past its work.
+ */
+const heartbeat = setInterval(writeStatus, 5_000);
+heartbeat.unref();
 
 // ------------------------------------------------------------ command exec
 
