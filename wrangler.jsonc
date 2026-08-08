@@ -9,6 +9,21 @@
     "enabled": true
   },
 
+  // A task pipeline runs to completion inside one Durable Object context, and
+  // the default budget is 30 seconds of CPU between incoming requests — past
+  // that the object is liable to be evicted and reset mid-task. Polling from
+  // the CLI does not help: that resets the *request's* timer, not the
+  // background work's. Observed as a task dying partway through, first at
+  // `install` and then at `test` as the work got faster.
+  //
+  // 5 minutes is the documented maximum. This buys headroom rather than
+  // removing the ceiling: work is mostly I/O, but redaction and log writes
+  // over large streamed output are real CPU. A genuinely long task will still
+  // need the pipeline split across contexts.
+  "limits": {
+    "cpu_ms": 300000
+  },
+
   // This is a private, single-user control plane. Bearer auth already fails
   // closed, but per-version preview hostnames only widen the attack surface
   // for no benefit here, so turn them off explicitly rather than inheriting

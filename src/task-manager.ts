@@ -10,6 +10,8 @@ import type { Env, LogLine, TaskRecord, TaskRequest, TaskResult, TaskView } from
 
 /** Storage bound per task so a runaway job cannot fill the Durable Object. */
 const MAX_LOG_LINES = 20_000;
+/** Lines buffered before a write. Keeps storage calls off the hot output path. */
+const LOG_FLUSH_SIZE = 64;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
@@ -31,6 +33,14 @@ export class TaskManager extends DurableObject<Env> {
   private readonly running = new Map<string, AbortController>();
   private queue: string[] = [];
   private logSeq = new Map<string, number>();
+  /**
+   * Log lines waiting to be written.
+   *
+   * Writing one row per output chunk meant thousands of synchronous storage
+   * calls during `npm install` and Claude Code's streamed output, which is
+   * what killed the object mid-task. Batching keeps that bounded.
+   */
+  private pendingLogs = new Map<string, LogLine[]>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -121,6 +131,8 @@ export class TaskManager extends DurableObject<Env> {
   }
 
   async getLogs(taskId: string, since = 0, limit = 2000): Promise<LogLine[]> {
+    // Followers poll this; flush so buffered lines are visible immediately.
+    this.flushLogs(taskId);
     return this.sql
       .exec<LogLine>(
         'SELECT seq, ts, stream, line FROM logs WHERE task_id = ? AND seq > ? ORDER BY seq LIMIT ?',
@@ -259,6 +271,7 @@ export class TaskManager extends DurableObject<Env> {
       await this.store.sandboxRuns.patch(runId, { status: 'failed', endedAt: Date.now() });
       this.appendLog(task.id, 'system', `task ${cancelled ? 'cancelled' : 'failed'}: ${message}`);
     } finally {
+      this.flushLogs(task.id);
       this.running.delete(task.id);
       this.logSeq.delete(task.id);
       await this.drain();
@@ -420,13 +433,25 @@ export class TaskManager extends DurableObject<Env> {
     const seq = (this.logSeq.get(taskId) ?? this.currentMaxSeq(taskId)) + 1;
     if (seq > MAX_LOG_LINES) return;
     this.logSeq.set(taskId, seq);
+
+    const pending = this.pendingLogs.get(taskId) ?? [];
+    pending.push({ seq, ts: Date.now(), stream, line: line.slice(0, 8000) });
+    this.pendingLogs.set(taskId, pending);
+
+    if (pending.length >= LOG_FLUSH_SIZE) this.flushLogs(taskId);
+  }
+
+  /** Write buffered lines as one multi-row insert. Values stay bound. */
+  private flushLogs(taskId: string): void {
+    const pending = this.pendingLogs.get(taskId);
+    if (!pending || pending.length === 0) return;
+    this.pendingLogs.delete(taskId);
+
+    const placeholders = pending.map(() => '(?, ?, ?, ?, ?)').join(', ');
+    const params = pending.flatMap((entry) => [taskId, entry.seq, entry.ts, entry.stream, entry.line]);
     this.sql.exec(
-      'INSERT OR REPLACE INTO logs (task_id, seq, ts, stream, line) VALUES (?, ?, ?, ?, ?)',
-      taskId,
-      seq,
-      Date.now(),
-      stream,
-      line.slice(0, 8000)
+      `INSERT OR REPLACE INTO logs (task_id, seq, ts, stream, line) VALUES ${placeholders}`,
+      ...params
     );
   }
 
