@@ -3,7 +3,7 @@ import { loadConfig } from './config';
 import { getSandboxProvider, type SnapshotRef } from './providers';
 import { createRedactor, type Redactor } from './redact';
 import { MAX_PROMPT_LENGTH, runJob, JobCancelledError } from './runner';
-import type { Env, JobRecord, JobRequest, JobResult, LogLine } from './types';
+import type { Env, JobRecord, JobRequest, JobResult, LogLine, SandboxLedger, SandboxLedgerEntry } from './types';
 
 const MAX_LOG_LINES = 20_000;
 /** Lines buffered before a write. Keeps storage calls off the hot output path. */
@@ -83,6 +83,21 @@ export class JobManager extends DurableObject<Env> {
         CREATE TABLE IF NOT EXISTS meta (
           key   TEXT PRIMARY KEY,
           value TEXT NOT NULL
+        );
+        -- Ledger of every sandbox this object has allocated.
+        --
+        -- Exists because there was no way to answer "is what I allocated
+        -- actually reclaimed?". The container platform's instance count turned
+        -- out to report provisioned capacity, not running containers, so an
+        -- external metric cannot answer it either. This object creates the
+        -- sandboxes, so this object records them.
+        CREATE TABLE IF NOT EXISTS sandboxes (
+          id            TEXT PRIMARY KEY,
+          job_id        TEXT NOT NULL,
+          created_at    INTEGER NOT NULL,
+          destroyed_at  INTEGER,
+          attempts      INTEGER NOT NULL DEFAULT 0,
+          last_error    TEXT
         );
       `);
 
@@ -251,7 +266,15 @@ export class JobManager extends DurableObject<Env> {
     redact: Redactor
   ): Promise<void> {
     const config = loadConfig(this.env);
-    const sandbox = await getSandboxProvider(this.env).create(`rc-${job.id}`, {
+    const sandboxId = `rc-${job.id}`;
+    this.sql.exec(
+      `INSERT INTO sandboxes (id, job_id, created_at) VALUES (?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET created_at = excluded.created_at, destroyed_at = NULL`,
+      sandboxId,
+      job.id,
+      Date.now()
+    );
+    const sandbox = await getSandboxProvider(this.env).create(sandboxId, {
       sleepAfter: config.sleepAfter,
     });
 
@@ -303,21 +326,63 @@ export class JobManager extends DurableObject<Env> {
 
   // ---------------------------------------------------- sandbox lifecycle
 
-  /** Destroy a job's sandbox and record that it is gone. Never throws. */
+  /**
+   * Destroy a job's sandbox and record the outcome. Never throws.
+   *
+   * Failures are recorded rather than swallowed: a sandbox that repeatedly
+   * refuses to go away is exactly the thing the ledger exists to surface.
+   */
   private async teardown(jobId: string): Promise<void> {
+    const sandboxId = `rc-${jobId}`;
+    this.sql.exec('UPDATE sandboxes SET attempts = attempts + 1 WHERE id = ?', sandboxId);
+
     try {
-      const sandbox = await getSandboxProvider(this.env).create(`rc-${jobId}`);
+      const sandbox = await getSandboxProvider(this.env).create(sandboxId);
       await sandbox.destroy();
-      this.appendLog(jobId, 'system', 'sandbox destroyed');
-    } catch {
-      // Already gone, or the platform is unavailable. The sweep retries.
+    } catch (error) {
+      this.sql.exec(
+        'UPDATE sandboxes SET last_error = ? WHERE id = ?',
+        errorMessage(error).slice(0, 500),
+        sandboxId
+      );
       return;
     }
+
+    this.sql.exec(
+      'UPDATE sandboxes SET destroyed_at = ?, last_error = NULL WHERE id = ?',
+      Date.now(),
+      sandboxId
+    );
+    this.appendLog(jobId, 'system', 'sandbox destroyed');
+
     const job = this.load(jobId);
     if (job) {
       job.sandboxDestroyed = true;
       this.persist(job);
     }
+  }
+
+  /**
+   * What this object has allocated and whether it got it back.
+   *
+   * `outstanding` is the number that matters: anything there is a sandbox we
+   * created and have not confirmed destroyed.
+   */
+  async listSandboxes(): Promise<SandboxLedger> {
+    const rows = this.sql
+      .exec<SandboxLedgerEntry>(
+        `SELECT id, job_id AS jobId, created_at AS createdAt, destroyed_at AS destroyedAt,
+                attempts, last_error AS lastError
+         FROM sandboxes ORDER BY created_at DESC LIMIT 100`
+      )
+      .toArray();
+
+    return {
+      outstanding: rows.filter((row) => row.destroyedAt === null),
+      destroyed: rows.filter((row) => row.destroyedAt !== null).length,
+      running: [...this.running.keys()],
+      entries: rows,
+    };
   }
 
   /**
@@ -330,18 +395,20 @@ export class JobManager extends DurableObject<Env> {
    */
   private async sweepOrphans(): Promise<void> {
     const now = Date.now();
-    const jobs = await this.listJobs(100);
+    const outstanding = this.sql
+      .exec<{ job_id: string }>('SELECT job_id FROM sandboxes WHERE destroyed_at IS NULL')
+      .toArray();
 
-    for (const job of jobs) {
-      if (!isTerminal(job.status)) continue;
-      if (job.sandboxDestroyed) continue;
-      if (this.running.has(job.id)) continue;
+    for (const { job_id: jobId } of outstanding) {
+      if (this.running.has(jobId)) continue;
+      const job = this.load(jobId);
+      if (!job || !isTerminal(job.status)) continue;
 
       // "Keep" means keep for inspection, not keep forever.
       const finished = job.finishedAt ?? job.createdAt;
       if (job.options.keepSandbox && now - finished < KEEP_GRACE_MS) continue;
 
-      await this.teardown(job.id);
+      await this.teardown(jobId);
     }
   }
 

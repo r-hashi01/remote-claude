@@ -26,6 +26,7 @@ remote-claude — run Claude Code on Cloudflare, not on your Mac
   remote-claude apply <job-id>         apply that diff to the local worktree
   remote-claude cancel <job-id>        cancel a running job
   remote-claude list                    list recent jobs
+  remote-claude sandboxes               show what is allocated and not reclaimed
   remote-claude health [--auth]         check the worker (and Claude auth)
 
 Options for run:
@@ -267,6 +268,28 @@ async function cmdList(config) {
   return 0;
 }
 
+async function cmdSandboxes(config) {
+  const ledger = await api(config, '/sandboxes');
+  log(`outstanding ${ledger.outstanding.length}   reclaimed ${ledger.destroyed}   running ${ledger.running.length}`);
+
+  if (ledger.outstanding.length === 0) {
+    log('nothing outstanding');
+    return 0;
+  }
+
+  log('');
+  for (const entry of ledger.outstanding) {
+    const age = Math.round((Date.now() - entry.createdAt) / 1000);
+    const executing = ledger.running.includes(entry.jobId) ? ' (job running)' : '';
+    log(`${entry.id}  age ${age}s  attempts ${entry.attempts}${executing}`);
+    if (entry.lastError) log(`  last error: ${entry.lastError}`);
+  }
+
+  // Outstanding entries for jobs that are no longer running are leaks.
+  const leaked = ledger.outstanding.filter((entry) => !ledger.running.includes(entry.jobId));
+  return leaked.length > 0 ? 1 : 0;
+}
+
 async function cmdHealth(config, args) {
   const health = await api(config, '/health');
   log(`worker: ${health.ok ? 'ok' : 'unhealthy'}`);
@@ -362,6 +385,7 @@ const COMMANDS = {
   apply: cmdApply,
   cancel: cmdCancel,
   list: cmdList,
+  sandboxes: cmdSandboxes,
   health: cmdHealth,
 };
 

@@ -97,7 +97,11 @@
     "MAX_CONCURRENCY": "3",
     "JOB_TIMEOUT_MS": "1800000",
     "CLAUDE_TIMEOUT_MS": "1500000",
-    "SANDBOX_SLEEP_AFTER": "5m",
+    // Sandboxes are per-job (rc-<jobId>) and never reused, so the only window
+    // this covers is between a job ending and teardown. Nothing is gained by
+    // holding one longer, and a shorter value bounds how long an unreclaimed
+    // sandbox can stay awake.
+    "SANDBOX_SLEEP_AFTER": "2m",
 
     // Safety switches. Both off by default.
     "ALLOW_PUSH": "false",

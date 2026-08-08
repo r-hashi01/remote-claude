@@ -60,6 +60,13 @@ async function route(request: Request, env: Env): Promise<Response> {
     return Response.json({ tasks: await jobs.listJobs(limit) });
   }
 
+  // What this deployment has allocated and whether it got it back. Exists
+  // because no external metric can answer that: the container platform reports
+  // provisioned capacity, not running instances.
+  if (path === '/sandboxes' && method === 'GET') {
+    return Response.json(await jobs.listSandboxes());
+  }
+
   if (path === '/health/auth' && method === 'GET') {
     return await probeClaudeAuth(env);
   }

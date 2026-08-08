@@ -132,6 +132,31 @@ export interface JobResult {
 }
 
 /**
+ * One row of the sandbox allocation ledger.
+ *
+ * A type alias, not an interface: only aliases get the implicit index
+ * signature that `SqlStorage.exec<T>()` requires.
+ */
+export type SandboxLedgerEntry = {
+  id: string;
+  jobId: string;
+  createdAt: number;
+  /** Null while the sandbox has not been confirmed destroyed. */
+  destroyedAt: number | null;
+  attempts: number;
+  lastError: string | null;
+};
+
+export interface SandboxLedger {
+  /** Allocated and not confirmed reclaimed. This is the number that matters. */
+  outstanding: SandboxLedgerEntry[];
+  destroyed: number;
+  /** Job ids currently executing, so outstanding entries can be explained. */
+  running: string[];
+  entries: SandboxLedgerEntry[];
+}
+
+/**
  * Declared as a type alias rather than an interface on purpose: only aliases
  * get an implicit index signature, which `SqlStorage.exec<T>()` requires.
  */
