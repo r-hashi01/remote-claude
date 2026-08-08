@@ -111,6 +111,23 @@ function setStatus(phase, extra = {}) {
 const heartbeat = setInterval(writeStatus, 5_000);
 heartbeat.unref();
 
+/**
+ * Record one raw agent event.
+ *
+ * Deliberately not interpreted here. Turning these into something a human
+ * reads is the Worker's job, which already owns that translator and uses it for
+ * the ACP surface too — writing a second one here meant two things to keep in
+ * agreement for no benefit. This side emits facts; the other side decides what
+ * they mean.
+ */
+function emitAgentEvent(line) {
+  logSeq += 1;
+  appendFileSync(
+    `${STATE_DIR}/log.ndjson`,
+    JSON.stringify({ seq: logSeq, ts: Date.now(), stream: 'agent', line: line.slice(0, 60000) }) + '\n'
+  );
+}
+
 // ------------------------------------------------------------ command exec
 
 function shellQuote(value) {
@@ -142,9 +159,23 @@ function run(name, command, options = {}) {
     });
 
     let output = '';
+    let partial = '';
     const capture = (stream) => (chunk) => {
       const text = chunk.toString();
       output += text;
+
+      // Only stdout carries the agent's event stream. stderr is warnings and
+      // diagnostics — routing it through the same path made non-JSON lines look
+      // like agent events, which the consumer then failed to parse.
+      if (options.onLine && stream === 'stdout') {
+        // NDJSON arrives in arbitrary chunks; only hand over complete lines.
+        partial += text;
+        const lines = partial.split('\n');
+        partial = lines.pop() ?? '';
+        for (const line of lines) if (line.trim()) options.onLine(line);
+        return;
+      }
+
       for (const line of text.split('\n')) log(stream, line);
     };
     child.stdout.on('data', capture('stdout'));
@@ -228,11 +259,15 @@ async function main() {
       'unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN;',
       'claude -p',
       shellQuote(job.prompt),
+      // Streamed rather than buffered. Without this nothing is emitted until
+      // the whole step finishes, so a job that is working and a job that is
+      // stuck look identical for minutes at a time.
+      '--output-format stream-json --verbose',
       '--permission-mode bypassPermissions',
       '--append-system-prompt',
       shellQuote(EXTRA_SYSTEM_PROMPT),
     ].join(' '),
-    { timeoutMs: job.claudeTimeoutMs }
+    { timeoutMs: job.claudeTimeoutMs, onLine: emitAgentEvent }
   );
 
   setStatus('checking');

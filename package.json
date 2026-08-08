@@ -11,8 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node src/acp.test.ts",
     "embed": "node scripts/embed-runner.mjs",
-    "predeploy": "node scripts/embed-runner.mjs",
-    "pretypecheck": "node scripts/embed-runner.mjs"
+    "pretypecheck": "node scripts/embed-runner.mjs",
+    "run:local": "node scripts/run-locally.mjs"
   },
   "devDependencies": {
     "@cloudflare/sandbox": "^0.12.4",

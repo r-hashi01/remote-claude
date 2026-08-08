@@ -202,8 +202,18 @@ function truncateTitle(value: string): string {
 
 // ------------------------------------------------------------- translation
 
+/** Consumption reported by Claude Code, previously parsed and thrown away. */
+export interface AgentUsage {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  turns: number | null;
+}
+
 export interface TranslationOutput {
   updates: SessionUpdate[];
+  /** Present on the result event. */
+  usage?: AgentUsage;
   /** Set when this event ends the turn. */
   stopReason?: StopReason;
   /** Claude Code's own session id, from the init event — needed for --resume. */
@@ -281,6 +291,16 @@ export function translateEvent(event: ClaudeStreamEvent): TranslationOutput {
         updates,
         stopReason: mapStopReason(event),
         finalText: typeof event.result === 'string' ? event.result : undefined,
+        ...(event.usage
+          ? {
+              usage: {
+                inputTokens: event.usage.input_tokens ?? 0,
+                outputTokens: event.usage.output_tokens ?? 0,
+                costUsd: typeof event.total_cost_usd === 'number' ? event.total_cost_usd : null,
+                turns: typeof event.num_turns === 'number' ? event.num_turns : null,
+              },
+            }
+          : {}),
       };
     }
 
@@ -367,6 +387,30 @@ function mapStopReason(event: ClaudeStreamEvent): StopReason {
   if (event.stop_reason === 'max_tokens') return 'max_tokens';
   if (event.stop_reason === 'refusal') return 'refusal';
   return 'end_turn';
+}
+
+/**
+ * Render one update as a line for a human watching a job.
+ *
+ * Lives here, next to the translation, so the job log and the ACP surface
+ * describe the same event the same way instead of drifting apart.
+ * Returns null for updates that have no useful one-line form.
+ */
+export function describeUpdate(update: SessionUpdate): string | null {
+  switch (update.sessionUpdate) {
+    case 'agent_message_chunk':
+      return update.content.type === 'text' ? update.content.text.trim() || null : null;
+    case 'agent_thought_chunk':
+      return null; // Thinking is noise in a job log; the ACP client shows it.
+    case 'tool_call':
+      return `· ${update.title}`;
+    case 'tool_call_update':
+      return update.status === 'failed' ? `· tool call failed (${update.toolCallId})` : null;
+    case 'plan':
+      return `· plan: ${update.entries.map((entry) => entry.content).join(' / ')}`;
+    default:
+      return null;
+  }
 }
 
 /** Split a byte stream into complete NDJSON lines, buffering partial tails. */

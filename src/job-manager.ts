@@ -2,6 +2,12 @@ import { DurableObject } from 'cloudflare:workers';
 import { loadConfig } from './config';
 import { getSandboxProvider, type SandboxProvider, type SnapshotRef } from './providers';
 import { createRedactor, type Redactor } from './redact';
+import {
+  describeUpdate,
+  translateEvent,
+  type AgentUsage,
+  type ClaudeStreamEvent,
+} from './acp';
 import { RUNNER_SOURCE } from './runner-source';
 import { MAX_PROMPT_LENGTH } from './shell';
 import type { Env, JobRecord, JobRequest, JobResult, LogLine, SandboxLedger, SandboxLedgerEntry } from './types';
@@ -42,6 +48,17 @@ const MAX_LAUNCH_ATTEMPTS = 3;
  * took thirty minutes to do it.
  */
 const HEARTBEAT_TIMEOUT_MS = 90_000;
+
+/**
+ * How long without any new output before the job is presumed stuck.
+ *
+ * Liveness and progress are different questions: a runner looping forever
+ * heartbeats perfectly happily. Progress needs no new signal — the log's own
+ * sequence number already is one. This only became usable once Claude's output
+ * was streamed rather than buffered until the step finished; before that a
+ * working job and a stuck job looked identical for minutes.
+ */
+const STALL_TIMEOUT_MS = 8 * 60 * 1000;
 
 /**
  * Errors that mean "the platform was busy", not "this job is broken".
@@ -459,6 +476,21 @@ export class JobManager extends DurableObject<Env> {
       return;
     }
 
+    // Alive but producing nothing for a long time. Distinct from a dead
+    // runner, and reported as such — "stuck" and "gone" want different responses
+    // from whoever reads this.
+    const progressed = job.lastProgressAt ?? job.startedAt ?? Date.now();
+    if (Date.now() - progressed > STALL_TIMEOUT_MS) {
+      await this.stopContainer(jobId);
+      await this.settle(
+        jobId,
+        'failed',
+        `no output for ${Math.round((Date.now() - progressed) / 60000)} minutes during ` +
+          `"${status?.phase ?? 'startup'}"; presumed stuck`
+      );
+      return;
+    }
+
     // Presume death rather than wait out the job timeout. Reported with the
     // phase it died in, which is the first thing anyone will want to know.
     const beat = status?.updatedAt ?? job.startedAt ?? Date.now();
@@ -516,9 +548,22 @@ export class JobManager extends DurableObject<Env> {
     for (const line of (tail.stdout ?? '').split('\n')) {
       if (!line.trim()) continue;
       try {
-        const entry = JSON.parse(line) as { seq: number; stream: LogLine['stream']; line: string };
-        this.appendLog(jobId, entry.stream, entry.line);
+        const entry = JSON.parse(line) as { seq: number; stream: string; line: string };
         highest = Math.max(highest, entry.seq);
+
+        if (entry.stream === 'agent') {
+          // Raw agent events, interpreted here by the same translator the ACP
+          // surface uses. The container emits facts; meaning is assigned once.
+          const translated = translateEvent(JSON.parse(entry.line) as ClaudeStreamEvent);
+          for (const update of translated.updates) {
+            const rendered = describeUpdate(update);
+            if (rendered) this.appendLog(jobId, 'stdout', rendered);
+          }
+          if (translated.usage) this.recordUsage(jobId, translated.usage);
+          continue;
+        }
+
+        this.appendLog(jobId, entry.stream as LogLine['stream'], entry.line);
       } catch {
         // A partially written final line; it arrives complete next poll.
       }
@@ -535,6 +580,8 @@ export class JobManager extends DurableObject<Env> {
       const current = this.load(jobId);
       if (current) {
         current.logSeq = highest;
+        // New output is the progress signal; nothing separate is needed.
+        current.lastProgressAt = Date.now();
         this.persist(current);
       }
     }
@@ -606,6 +653,20 @@ export class JobManager extends DurableObject<Env> {
     } catch {
       // Nothing to stop.
     }
+  }
+
+  /** Consumption is recorded as it arrives, so it survives a failed job too. */
+  private recordUsage(jobId: string, usage: AgentUsage): void {
+    const job = this.load(jobId);
+    if (!job) return;
+    job.usage = usage;
+    this.persist(job);
+    this.appendLog(
+      jobId,
+      'system',
+      `usage: ${usage.inputTokens} in / ${usage.outputTokens} out` +
+        (usage.turns ? `, ${usage.turns} turns` : '')
+    );
   }
 
   private redactor(): Redactor {

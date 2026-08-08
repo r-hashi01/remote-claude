@@ -113,6 +113,10 @@ export interface JobRecord {
   logSeq?: number;
   /** Launch attempts so far. Only the pre-runner window is ever retried. */
   attempts?: number;
+  /** When output last advanced. Progress, as distinct from liveness. */
+  lastProgressAt?: number;
+  /** What the agent consumed. Recorded as it arrives, so a failure keeps it. */
+  usage?: JobUsage;
   result?: JobResult;
   options: {
     skipChecks: boolean;
@@ -121,7 +125,16 @@ export interface JobRecord {
   };
 }
 
+/** What a job consumed. Produced by Claude Code and previously discarded. */
+export interface JobUsage {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  turns: number | null;
+}
+
 export interface JobResult {
+  usage?: JobUsage | null;
   /** Claude Code's final stdout (redacted). */
   claudeOutput: string;
   changed: boolean;

@@ -5,6 +5,16 @@
   "compatibility_date": "2026-04-22",
   "compatibility_flags": ["nodejs_compat"],
 
+  // Regenerate the embedded runner as part of every build.
+  //
+  // This was an npm predeploy hook, which only fires via `npm run deploy` —
+  // calling `wrangler deploy` directly skipped it and shipped a stale runner
+  // while the Worker had already moved on. A step that can be bypassed by
+  // running the underlying command is not a guarantee. Here it cannot be.
+  "build": {
+    "command": "node scripts/embed-runner.mjs"
+  },
+
   "observability": {
     "enabled": true
   },
