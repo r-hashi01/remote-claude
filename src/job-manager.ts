@@ -38,6 +38,22 @@ export class JobManager extends DurableObject<Env> {
     this.sql = ctx.storage.sql;
 
     ctx.blockConcurrencyWhile(async () => {
+      // Renaming a Durable Object class carries its storage over, so this
+      // object still holds the tables from when it was TaskManager. The `logs`
+      // table there is keyed by task_id, which CREATE TABLE IF NOT EXISTS
+      // silently leaves in place — every insert then fails with
+      // "no such column: job_id". Logs are short-lived, so rebuild rather than
+      // migrate, and drop the other legacy tables while we are here.
+      const logColumns = this.sql
+        .exec<{ name: string }>("SELECT name FROM pragma_table_info('logs')")
+        .toArray()
+        .map((row) => row.name);
+      if (logColumns.includes('task_id')) {
+        this.sql.exec('DROP TABLE logs');
+      }
+      this.sql.exec('DROP TABLE IF EXISTS tasks');
+      this.sql.exec('DROP TABLE IF EXISTS artifacts');
+
       this.sql.exec(`
         CREATE TABLE IF NOT EXISTS jobs (
           id         TEXT PRIMARY KEY,
