@@ -17,3 +17,10 @@ node_modules/
 # Wrangler build state and generated types
 .wrangler/
 worker-configuration.d.ts
+
+# Generated from container/runner.mjs by scripts/embed-runner.mjs, which runs
+# as wrangler's build step and as `pretypecheck`. Committing it put a second,
+# independently-editable copy of the runner in the tree — and it went stale,
+# which is the drift ADR 0007 exists to prevent. Not tracked, so there is
+# nothing to go stale.
+src/runner-source.ts

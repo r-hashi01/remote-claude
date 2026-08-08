@@ -309,6 +309,11 @@ function printSummary(task, id) {
   log('');
   log(`status   ${task.status}`);
   if (task.error) log(`error    ${task.error}`);
+  if (task.usage) {
+    const cost = typeof task.usage.costUsd === 'number' ? `, $${task.usage.costUsd.toFixed(4)}` : '';
+    const turns = task.usage.turns ? `, ${task.usage.turns} turns` : '';
+    log(`usage    ${task.usage.inputTokens} in / ${task.usage.outputTokens} out${turns}${cost}`);
+  }
   const result = task.result;
   if (!result) {
     log(`(no result yet — remote-claude logs ${id})`);
@@ -327,10 +332,12 @@ function printSummary(task, id) {
     log('');
     for (const line of result.diffStat.split('\n')) log('  ' + line);
   }
-  if (result.claudeOutput) {
+  // The agent's closing message, not `result.claudeOutput` — that is the raw
+  // stream-json event stream, which is for debugging, not for reading.
+  if (task.finalText) {
     log('');
     log('--- claude ---');
-    log(result.claudeOutput.trim().slice(0, 4000));
+    log(task.finalText.trim().slice(0, 4000));
   }
   if (result.changed) {
     log('');

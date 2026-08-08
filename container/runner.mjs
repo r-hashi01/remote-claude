@@ -156,6 +156,11 @@ function run(name, command, options = {}) {
     const child = spawn('bash', ['-lc', command], {
       cwd: options.cwd ?? REPO_DIR,
       env: { ...process.env, ...(options.env ?? {}) },
+      // Nothing in this pipeline reads input, and an open stdin pipe is not
+      // free: `claude -p` waits 3 seconds for it and then prints a warning into
+      // the output stream it is otherwise using for NDJSON events. Closing it
+      // here says what is true — there is no input — for every step at once.
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     let output = '';

@@ -559,7 +559,9 @@ export class JobManager extends DurableObject<Env> {
             const rendered = describeUpdate(update);
             if (rendered) this.appendLog(jobId, 'stdout', rendered);
           }
-          if (translated.usage) this.recordUsage(jobId, translated.usage);
+          if (translated.usage || translated.finalText) {
+            this.recordOutcome(jobId, translated.usage, translated.finalText);
+          }
           continue;
         }
 
@@ -655,18 +657,27 @@ export class JobManager extends DurableObject<Env> {
     }
   }
 
-  /** Consumption is recorded as it arrives, so it survives a failed job too. */
-  private recordUsage(jobId: string, usage: AgentUsage): void {
+  /**
+   * Record what the agent's turn ended with.
+   *
+   * Written as it arrives rather than at finalize, so a job that later fails
+   * still reports what it consumed and what it last said.
+   */
+  private recordOutcome(jobId: string, usage?: AgentUsage, finalText?: string): void {
     const job = this.load(jobId);
     if (!job) return;
-    job.usage = usage;
+    if (usage) job.usage = usage;
+    if (finalText) job.finalText = this.redactor()(finalText);
     this.persist(job);
-    this.appendLog(
-      jobId,
-      'system',
-      `usage: ${usage.inputTokens} in / ${usage.outputTokens} out` +
-        (usage.turns ? `, ${usage.turns} turns` : '')
-    );
+
+    if (usage) {
+      this.appendLog(
+        jobId,
+        'system',
+        `usage: ${usage.inputTokens} in / ${usage.outputTokens} out` +
+          (usage.turns ? `, ${usage.turns} turns` : '')
+      );
+    }
   }
 
   private redactor(): Redactor {

@@ -117,6 +117,14 @@ export interface JobRecord {
   lastProgressAt?: number;
   /** What the agent consumed. Recorded as it arrives, so a failure keeps it. */
   usage?: JobUsage;
+  /**
+   * The agent's closing message, taken from the result event.
+   *
+   * Kept separately from `result.claudeOutput`: since the agent runs with
+   * `--output-format stream-json`, that field is the raw event stream, which is
+   * the right thing to keep for debugging and the wrong thing to show a person.
+   */
+  finalText?: string;
   result?: JobResult;
   options: {
     skipChecks: boolean;
@@ -135,7 +143,10 @@ export interface JobUsage {
 
 export interface JobResult {
   usage?: JobUsage | null;
-  /** Claude Code's final stdout (redacted). */
+  /**
+   * The agent step's raw stdout (redacted, truncated) — an NDJSON event stream.
+   * For the closing message a person would read, see `JobRecord.finalText`.
+   */
   claudeOutput: string;
   changed: boolean;
   commitSha?: string;
