@@ -1,7 +1,7 @@
 import type { Config } from './config';
 import type { SandboxSession, SnapshotRef } from './providers';
 import type { Redactor } from './redact';
-import type { Env, ExecutionStatus, StepResult, TaskRecord, TaskResult } from './types';
+import type { Env, JobStatus, StepResult, JobRecord, JobResult } from './types';
 
 const REPO_DIR = '/workspace/repo';
 const GIT_USER_NAME = 'remote-claude';
@@ -23,10 +23,10 @@ const EXTRA_SYSTEM_PROMPT = [
   'Do not attempt to read or print environment variables containing credentials.',
 ].join(' ');
 
-export class TaskCancelledError extends Error {
+export class JobCancelledError extends Error {
   constructor() {
     super('task cancelled');
-    this.name = 'TaskCancelledError';
+    this.name = 'JobCancelledError';
   }
 }
 
@@ -40,8 +40,8 @@ function truncate(text: string, limit: number): string {
   return `${text.slice(0, limit)}\n… [truncated, ${text.length - limit} more characters]`;
 }
 
-export interface TaskRunOutcome {
-  result: TaskResult;
+export interface JobRunOutcome {
+  result: JobResult;
   /** Full unified diff of baseBranch..HEAD, redacted and size-capped. */
   patch: string;
 }
@@ -52,7 +52,7 @@ export interface RunnerDeps {
   redact: Redactor;
   signal: AbortSignal;
   log: (stream: 'system' | 'stdout' | 'stderr', line: string) => void;
-  setStatus: (status: ExecutionStatus) => void;
+  setStatus: (status: JobStatus) => void;
   /** Already-created sandbox for this task. The caller owns provider choice. */
   sandbox: SandboxSession;
   /**
@@ -63,11 +63,11 @@ export interface RunnerDeps {
   saveSnapshotRef: (ref: SnapshotRef) => void;
 }
 
-export async function runTask(task: TaskRecord, deps: RunnerDeps): Promise<TaskRunOutcome> {
+export async function runJob(task: JobRecord, deps: RunnerDeps): Promise<JobRunOutcome> {
   const { env, config, redact, signal, log, setStatus, sandbox } = deps;
 
   const throwIfCancelled = () => {
-    if (signal.aborted) throw new TaskCancelledError();
+    if (signal.aborted) throw new JobCancelledError();
   };
 
   setStatus('starting');
@@ -119,8 +119,8 @@ export async function runTask(task: TaskRecord, deps: RunnerDeps): Promise<TaskR
 
     // Race the command against cancellation so a killed process cannot hang us.
     const aborted = new Promise<never>((_, reject) => {
-      if (signal.aborted) return reject(new TaskCancelledError());
-      signal.addEventListener('abort', () => reject(new TaskCancelledError()), { once: true });
+      if (signal.aborted) return reject(new JobCancelledError());
+      signal.addEventListener('abort', () => reject(new JobCancelledError()), { once: true });
     });
 
     const result = await Promise.race([exec, aborted]);
@@ -185,7 +185,7 @@ export async function runTask(task: TaskRecord, deps: RunnerDeps): Promise<TaskR
 
     // ---- 4. Install dependencies -------------------------------------
     if (config.commands.install) {
-      await run('install', config.commands.install, { timeout: config.taskTimeoutMs });
+      await run('install', config.commands.install, { timeout: config.jobTimeoutMs });
     } else {
       skip('install', 'INSTALL_COMMAND is not configured');
     }
@@ -209,7 +209,7 @@ export async function runTask(task: TaskRecord, deps: RunnerDeps): Promise<TaskR
       ] as const) {
         if (command) {
           // Check failures are reported, not fatal: the diff is still useful.
-          await run(name, command, { timeout: config.taskTimeoutMs, allowFailure: true });
+          await run(name, command, { timeout: config.jobTimeoutMs, allowFailure: true });
         } else {
           skip(name, `${name.toUpperCase()}_COMMAND is not configured`);
         }
@@ -266,7 +266,7 @@ type RunFn = (
 /** Fresh clone, or restore-then-refresh when the workspace cache is on. */
 async function prepareRepo(
   sandbox: SandboxSession,
-  task: TaskRecord,
+  task: JobRecord,
   deps: RunnerDeps,
   run: RunFn
 ): Promise<void> {
@@ -318,7 +318,7 @@ async function restoreWorkspaceSnapshot(sandbox: SandboxSession, deps: RunnerDep
   return sandbox.restore(ref);
 }
 
-async function runClaude(task: TaskRecord, deps: RunnerDeps, run: RunFn): Promise<StepResult> {
+async function runClaude(task: JobRecord, deps: RunnerDeps, run: RunFn): Promise<StepResult> {
   const { env, config } = deps;
 
   // `unset` is belt-and-braces on top of passing the vars as undefined: it
@@ -340,12 +340,12 @@ async function runClaude(task: TaskRecord, deps: RunnerDeps, run: RunFn): Promis
 }
 
 async function collectResult(
-  task: TaskRecord,
+  task: JobRecord,
   deps: RunnerDeps,
   run: RunFn,
   steps: StepResult[],
   claudeOutput: string
-): Promise<TaskRunOutcome> {
+): Promise<JobRunOutcome> {
   const { config, redact, log } = deps;
 
   const porcelain = await run('git-status-porcelain', `git -C ${REPO_DIR} status --porcelain`, {

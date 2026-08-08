@@ -5,7 +5,7 @@ export interface Config {
   defaultBaseBranch: string;
   claudeAuthMode: 'proxy' | 'direct';
   maxConcurrency: number;
-  taskTimeoutMs: number;
+  jobTimeoutMs: number;
   claudeTimeoutMs: number;
   sleepAfter: string;
   allowPush: boolean;
@@ -48,7 +48,7 @@ export function loadConfig(env: Env): Config {
     defaultBaseBranch: env.DEFAULT_BASE_BRANCH || 'main',
     claudeAuthMode: mode === 'direct' ? 'direct' : 'proxy',
     maxConcurrency: num(env.MAX_CONCURRENCY, 3),
-    taskTimeoutMs: num(env.TASK_TIMEOUT_MS, 30 * 60 * 1000),
+    jobTimeoutMs: num(env.JOB_TIMEOUT_MS, 30 * 60 * 1000),
     claudeTimeoutMs: num(env.CLAUDE_TIMEOUT_MS, 25 * 60 * 1000),
     sleepAfter: env.SANDBOX_SLEEP_AFTER || '5m',
     allowPush: bool(env.ALLOW_PUSH),

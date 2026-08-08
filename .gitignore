@@ -1,0 +1,19 @@
+node_modules/
+*.log
+.DS_Store
+
+# --- never commit credentials ----------------------------------------
+# Local wrangler secrets
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Local CLI config (contains REMOTE_CLAUDE_TOKEN)
+.remote-claude.json
+
+# GitHub App private keys, however they are named locally
+*.pem
+
+# Wrangler build state and generated types
+.wrangler/
+worker-configuration.d.ts

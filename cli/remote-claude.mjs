@@ -9,24 +9,23 @@
 
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(HERE, '..', '..', '..');
+// The CLI is repository-agnostic: it acts on wherever you invoke it from.
+const REPO_ROOT = process.cwd();
 
 const USAGE = `
 remote-claude — run Claude Code on Cloudflare, not on your Mac
 
-  remote-claude "<prompt>"              start a task and follow it
+  remote-claude "<prompt>"              start a job and follow it
   remote-claude run "<prompt>" [opts]   same, explicit form
-  remote-claude status <task-id>        show a task's status and summary
-  remote-claude logs <task-id> [-f]     print logs (-f/--follow to tail)
-  remote-claude diff <task-id>          print the unified diff
-  remote-claude apply <task-id>         apply that diff to the local worktree
-  remote-claude cancel <task-id>        cancel a running task
-  remote-claude list                    list recent tasks
+  remote-claude status <job-id>        show a job's status and summary
+  remote-claude logs <job-id> [-f]     print logs (-f/--follow to tail)
+  remote-claude diff <job-id>          print the unified diff
+  remote-claude apply <job-id>         apply that diff to the local worktree
+  remote-claude cancel <job-id>        cancel a running job
+  remote-claude list                    list recent jobs
   remote-claude health [--auth]         check the worker (and Claude auth)
 
 Options for run:
@@ -43,8 +42,7 @@ Configuration (first match wins):
   file ~/.config/remote-claude/config.json
 `.trim();
 
-/** Statuses that mean the work succeeded. Everything else is a non-zero exit. */
-const SUCCESS = new Set(['ready_for_review', 'done']);
+const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 
 // ---------------------------------------------------------------- config
 
@@ -119,7 +117,7 @@ async function cmdRun(config, args) {
   const prompt = opts._.join(' ').trim();
   if (!prompt) fail('a prompt is required\n\n' + USAGE);
 
-  const created = await api(config, '/tasks', {
+  const created = await api(config, '/jobs', {
     method: 'POST',
     body: {
       prompt,
@@ -134,25 +132,25 @@ async function cmdRun(config, args) {
     process.stdout.write(JSON.stringify(created) + '\n');
     if (opts['no-follow']) return 0;
   } else {
-    log(`task ${created.taskId} → branch ${created.branch}`);
+    log(`job ${created.jobId} → branch ${created.branch}`);
     if (opts['no-follow']) {
-      log(`follow with:  remote-claude logs ${created.taskId} -f`);
+      log(`follow with:  remote-claude logs ${created.jobId} -f`);
       return 0;
     }
     log('');
   }
 
-  const final = await follow(config, created.taskId, !opts.json);
-  if (!opts.json) printSummary(final, created.taskId);
+  const final = await follow(config, created.jobId, !opts.json);
+  if (!opts.json) printSummary(final, created.jobId);
   else process.stdout.write(JSON.stringify(final) + '\n');
 
-  return SUCCESS.has(final.status) ? 0 : 1;
+  return final.status === 'completed' ? 0 : 1;
 }
 
 async function follow(config, id, echo) {
   let since = 0;
   for (;;) {
-    const { logs, nextSince } = await api(config, `/tasks/${id}/logs?since=${since}`);
+    const { logs, nextSince } = await api(config, `/jobs/${id}/logs?since=${since}`);
     since = nextSince ?? since;
     if (echo) {
       for (const entry of logs) {
@@ -161,12 +159,10 @@ async function follow(config, id, echo) {
       }
     }
 
-    const task = await api(config, `/tasks/${id}`);
-    // `settled` is computed server-side so the CLI never has to track the
-    // work-status vocabulary.
-    if (task.settled) {
+    const task = await api(config, `/jobs/${id}`);
+    if (TERMINAL.has(task.status)) {
       // Drain anything written between the two calls.
-      const tail = await api(config, `/tasks/${id}/logs?since=${since}`);
+      const tail = await api(config, `/jobs/${id}/logs?since=${since}`);
       if (echo) for (const entry of tail.logs) process.stdout.write('  ' + entry.line + '\n');
       return task;
     }
@@ -176,13 +172,13 @@ async function follow(config, id, echo) {
 
 async function cmdStatus(config, args) {
   const id = requireId(args);
-  const task = await api(config, `/tasks/${id}`);
+  const task = await api(config, `/jobs/${id}`);
   if (args.includes('--json')) {
     process.stdout.write(JSON.stringify(task, null, 2) + '\n');
     return 0;
   }
   printSummary(task, id);
-  return task.settled && !SUCCESS.has(task.status) ? 1 : 0;
+  return TERMINAL.has(task.status) && task.status !== 'completed' ? 1 : 0;
 }
 
 async function cmdLogs(config, args) {
@@ -191,14 +187,14 @@ async function cmdLogs(config, args) {
     await follow(config, id, true);
     return 0;
   }
-  const text = await api(config, `/tasks/${id}/logs?format=text`, { raw: true });
+  const text = await api(config, `/jobs/${id}/logs?format=text`, { raw: true });
   process.stdout.write(text + '\n');
   return 0;
 }
 
 async function cmdDiff(config, args) {
   const id = requireId(args);
-  const patch = await api(config, `/tasks/${id}/diff`, { raw: true });
+  const patch = await api(config, `/jobs/${id}/diff`, { raw: true });
   if (!patch.trim()) {
     log('(no changes)');
     return 1;
@@ -209,7 +205,7 @@ async function cmdDiff(config, args) {
 
 async function cmdApply(config, args) {
   const id = requireId(args);
-  const patch = await api(config, `/tasks/${id}/diff`, { raw: true });
+  const patch = await api(config, `/jobs/${id}/diff`, { raw: true });
   if (!patch.trim()) {
     log('(no changes to apply)');
     return 1;
@@ -217,7 +213,7 @@ async function cmdApply(config, args) {
 
   const check = args.includes('--check') ? ['--check'] : [];
   const code = await pipeToGit(['apply', '--3way', ...check], patch);
-  if (code === 0) log(check.length ? 'patch applies cleanly' : `applied task ${id} to the working tree`);
+  if (code === 0) log(check.length ? 'patch applies cleanly' : `applied job ${id} to the working tree`);
   else log('git apply failed — inspect with: remote-claude diff ' + id);
   return code;
 }
@@ -233,15 +229,15 @@ function pipeToGit(argv, input) {
 
 async function cmdCancel(config, args) {
   const id = requireId(args);
-  const result = await api(config, `/tasks/${id}/cancel`, { method: 'POST' });
-  log(`task ${result.taskId}: ${result.status}`);
+  const result = await api(config, `/jobs/${id}/cancel`, { method: 'POST' });
+  log(`job ${result.jobId}: ${result.status}`);
   return 0;
 }
 
 async function cmdList(config) {
-  const { tasks } = await api(config, '/tasks?limit=20');
+  const { tasks } = await api(config, '/jobs?limit=20');
   if (tasks.length === 0) {
-    log('no tasks yet');
+    log('no jobs yet');
     return 0;
   }
   for (const task of tasks) {
@@ -270,7 +266,7 @@ async function cmdHealth(config, args) {
 function printSummary(task, id) {
   log('');
   log(`status   ${task.status}`);
-  if (task.statusReason) log(`reason   ${task.statusReason}`);
+  if (task.error) log(`error    ${task.error}`);
   const result = task.result;
   if (!result) {
     log(`(no result yet — remote-claude logs ${id})`);
@@ -318,7 +314,7 @@ function parseArgs(argv, { flags = [], values = [] }) {
 
 function requireId(args) {
   const id = args.find((a) => !a.startsWith('-'));
-  if (!id) fail('a task id is required');
+  if (!id) fail('a job id is required');
   return id;
 }
 

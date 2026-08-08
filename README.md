@@ -1,13 +1,17 @@
 # remote-claude
 
-ローカルMacではなく **Cloudflare Sandbox 上で Claude Code を実行する**ためのリモート開発環境。
+ローカルマシンではなく **Cloudflare Sandbox 上で Claude Code を実行する**ための実行基盤。
 
 `clone / 編集 / install / build / lint / test / diff / commit` をすべてCloudflare上の隔離Linux環境で行い、
-ローカルには**結果のdiffだけ**が返ってくる。ローカルでClaude Code本体もDockerも動かさない。
+手元には**結果のdiffだけ**が返る。ローカルでClaude Code本体もDockerも動かさない。
 
 ```bash
-./remote-claude "ログイン時の500エラーを調査して修正して"
+remote-claude "ログイン時の500エラーを調査して修正して"
 ```
+
+> **スコープ**: この基盤が扱うのは **job**（プロンプトを1本実行してdiffを返す）だけで、
+> Project や継続的な仕事の状態は扱わない。それらは呼び出し側のプロダクト
+> （[spindle](https://github.com/r-hashi01/spindle)）の責務。
 
 ---
 
@@ -41,7 +45,7 @@ Cloudflare Sandbox / Container   ── 1 task = 1 Sandbox
 | 原則 | 実装 |
 |---|---|
 | WorkerでClaude Codeを実行しない | Workerはrouting / task管理のみ。実行は必ずSandbox内 |
-| 1作業単位 = 1 Sandbox | `sandboxId = rc-<taskId>`。task終了時に `destroy()` |
+| 1作業単位 = 1 Sandbox | `sandboxId = rc-<jobId>`。task終了時に `destroy()` |
 | ローカルでbuild/testしない | すべてSandbox内。CLIは`fetch`しかしない |
 | ローカルでDockerを使わない | container imageのbuildはGitHub Actions上で実行 |
 | credentialをcontainerに置かない | 下記「認証モデル」参照 |
@@ -49,23 +53,20 @@ Cloudflare Sandbox / Container   ── 1 task = 1 Sandbox
 ### ファイル構成
 
 ```text
-infra/remote-claude/
   wrangler.jsonc      Worker/Container/DO/varsの設定
   Dockerfile          Sandbox image (claude + toolchain)
   src/
     index.ts          Worker entry。routing・bearer認証・DO/Sandboxのexport
     sandbox.ts        Sandbox subclass。network allowlist と credential注入
-    task-manager.ts   TaskManager DO。状態/logs/patch・queue・同時実行数
+    job-manager.ts    JobManager DO。ジョブ状態・logs・queue・同時実行数
     runner.ts         Sandbox内で実行するpipeline本体
     config.ts         env varsのparseとdefault
     github-app.ts     GitHub App JWT署名とinstallation tokenの発行/cache
     redact.ts         secret masking
     types.ts          共有型
   cli/remote-claude.mjs   ローカルCLI (依存なし)
-../../remote-claude       repo rootのwrapper (`./remote-claude`)
-../../.github/workflows/
-  deploy-remote-claude.yml         push時にdeploy
-  sync-remote-claude-secrets.yml   手動でsecretをCloudflareへ同期
+.github/workflows/
+  deploy.yml          push時にdeploy
 ```
 
 ---
@@ -160,7 +161,7 @@ R2を使わない初期構成なら **手動作成は不要**。`wrangler deploy
 | `GH_APP_INSTALLATION_ID` | （任意）同上 |
 
 > **絶対にrepositoryへ平文で置かない。** `.dev.vars` と `.remote-claude.json` は `.gitignore` 済み。
-> 確認: `git check-ignore -v infra/remote-claude/.dev.vars .remote-claude.json`
+> 確認: `git check-ignore -v .dev.vars .remote-claude.json`
 
 ---
 
@@ -228,7 +229,7 @@ openssl rand -hex 32
 ### 4. Cloudflare へ secret を登録
 
 ```bash
-cd infra/remote-claude
+cd remote-claude
 npm install
 
 npx wrangler secret put CLAUDE_CODE_OAUTH_TOKEN    # 手順1の値
@@ -277,7 +278,7 @@ Dashboard → Zero Trust → Access → Applications → Add an application → 
 git push origin main
 ```
 
-`infra/remote-claude/**` に変更があると `deploy-remote-claude.yml` が起動し、
+`**` に変更があると `deploy-remote-claude.yml` が起動し、
 GitHub Actionsのrunner上で container image をbuildして `wrangler deploy` まで実行する。
 **ローカルMacでDockerは起動しない。**
 
@@ -288,7 +289,7 @@ GitHub Actionsのrunner上で container image をbuildして `wrangler deploy` �
 この場合のみローカルでDockerが必要。
 
 ```bash
-cd infra/remote-claude
+cd remote-claude
 npx wrangler deploy
 ```
 
@@ -324,15 +325,15 @@ CLOUDFLARE_ACCOUNT_ID  = npx wrangler whoami で確認した値
 ./remote-claude "原因を調べて" --keep
 
 # 状態・log・diff
-./remote-claude status <task-id>
-./remote-claude logs   <task-id> -f
-./remote-claude diff   <task-id>
-./remote-claude cancel <task-id>
+./remote-claude status <job-id>
+./remote-claude logs   <job-id> -f
+./remote-claude diff   <job-id>
+./remote-claude cancel <job-id>
 ./remote-claude list
 
 # diffをローカルのworking treeへ適用
-./remote-claude apply <task-id>
-./remote-claude apply <task-id> --check   # 適用可能かだけ確認
+./remote-claude apply <job-id>
+./remote-claude apply <job-id> --check   # 適用可能かだけ確認
 
 # 疎通確認
 ./remote-claude health
@@ -345,24 +346,24 @@ CLOUDFLARE_ACCOUNT_ID  = npx wrangler whoami で確認した値
 
 | Method | Path | 説明 |
 |---|---|---|
-| `POST` | `/tasks` | task開始。即座に `taskId` を返す（202） |
-| `GET` | `/tasks` | 直近のtask一覧 |
-| `GET` | `/tasks/:id` | task状態と結果 |
-| `GET` | `/tasks/:id/logs` | `?since=<seq>` `?format=text` |
-| `GET` | `/tasks/:id/diff` | unified diff（text/x-patch） |
-| `POST` | `/tasks/:id/cancel` | キャンセル |
+| `POST` | `/jobs` | ジョブ開始。即座に `jobId` を返す（202） |
+| `GET` | `/jobs` | 直近のジョブ一覧 |
+| `GET` | `/jobs/:id` | task状態と結果 |
+| `GET` | `/jobs/:id/logs` | `?since=<seq>` `?format=text` |
+| `GET` | `/jobs/:id/diff` | unified diff（text/x-patch） |
+| `POST` | `/jobs/:id/cancel` | キャンセル |
 | `GET` | `/health` | 認証不要のliveness |
 | `GET` | `/health/auth` | Claude認証のend-to-end確認 |
 
 ```bash
-curl -X POST https://remote-claude.<subdomain>.workers.dev/tasks \
+curl -X POST https://remote-claude.<subdomain>.workers.dev/jobs \
   -H "authorization: Bearer $REMOTE_CLAUDE_TOKEN" \
   -H "content-type: application/json" \
   -d '{"prompt": "このバグを修正して", "baseBranch": "main"}'
 ```
 
 ```json
-{ "taskId": "m9x2k1-4f8a2b1c", "status": "queued", "branch": "claude/m9x2k1-4f8a2b1c" }
+{ "jobId": "m9x2k1-4f8a2b1c", "status": "queued", "branch": "claude/m9x2k1-4f8a2b1c" }
 ```
 
 ### status の遷移
@@ -379,7 +380,7 @@ queued → starting → running → completed
 
 1. clone（またはcacheからrestore→`fetch`/`checkout`/`reset --hard`）
 2. `verify-no-api-key` — API key混入チェック
-3. `claude/<task-id>` branchを作成（**main/masterは直接触らない**）
+3. `claude/<job-id>` branchを作成（**main/masterは直接触らない**）
 4. `INSTALL_COMMAND`
 5. （cache有効時）workspaceのsnapshotをR2へ
 6. `claude -p "<prompt>" --permission-mode bypassPermissions`
@@ -395,8 +396,8 @@ Claude Code自身にはcommit/pushをさせない（append-system-promptで禁�
 ## Logs
 
 ```bash
-./remote-claude logs <task-id>      # 全部
-./remote-claude logs <task-id> -f   # 追尾
+./remote-claude logs <job-id>      # 全部
+./remote-claude logs <job-id> -f   # 追尾
 ```
 
 Claude Codeとshell commandのstdout/stderrを行単位でDurable Objectに保存している（1 taskあたり最大20,000行）。
@@ -423,15 +424,15 @@ Worker側のログは `npx wrangler tail`。
 
 初期設定は**安全側**に倒してある。
 
-- `main` / `master` を直接変更しない。必ず `claude/<task-id>` branchを作る
+- `main` / `master` を直接変更しない。必ず `claude/<job-id>` branchを作る
 - **`git push` はデフォルトで行わない**（`ALLOW_PUSH=false`）
 - PR作成・mergeは一切行わない
 - 成果物は「patch」として取得し、人間が確認してから適用する
 
 ```bash
-./remote-claude diff <task-id>          # 目視確認
-./remote-claude apply <task-id> --check # 適用可能か確認
-./remote-claude apply <task-id>         # ローカルに適用
+./remote-claude diff <job-id>          # 目視確認
+./remote-claude apply <job-id> --check # 適用可能か確認
+./remote-claude apply <job-id>         # ローカルに適用
 ```
 
 ### 後からpushを有効化する
@@ -459,7 +460,7 @@ Worker側の `ALLOW_PUSH` と task側の `--push` の**両方**が揃ったと�
 npx wrangler deploy   # 再deployでcontainerは入れ替わる
 
 # 個別taskのキャンセル
-./remote-claude cancel <task-id>
+./remote-claude cancel <job-id>
 ```
 
 Dashboard → Workers & Pages → remote-claude → Containers からもインスタンスを確認・停止できる。
@@ -600,18 +601,18 @@ container内に `ANTHROPIC_API_KEY` が存在している。Dockerfileや `vars`
 
 ### Docker build が GitHub Actions で失敗する
 base imageに存在しないコマンドを `Dockerfile` に足していないか確認（例: `corepack` は入っていない）。
-ローカルで再現するには `cd infra/remote-claude && npx wrangler deploy --dry-run --outdir /tmp/build`。
+ローカルで再現するには `cd remote-claude && npx wrangler deploy --dry-run --outdir /tmp/build`。
 
 ### task が `running` のまま止まる
 Worker再起動でDurable Objectが落ちた可能性。次回のDO起動時に自動で `failed` に確定する。
-`./remote-claude cancel <task-id>` でも解消できる。
+`./remote-claude cancel <job-id>` でも解消できる。
 
 ### logs が途中で止まる
 1 taskあたり20,000行の上限に達している。`--skip-checks` で出力量を減らすか、promptを分割する。
 
 ### Worker自体のログを見たい
 ```bash
-cd infra/remote-claude && npx wrangler tail
+cd remote-claude && npx wrangler tail
 ```
 
 ---
@@ -656,7 +657,7 @@ Dashboard → Workers & Pages → remote-claude → Metrics、および Billing 
 
 ## ACP セッション（対話モード・実験的）
 
-`/tasks` の「一発実行してdiffを返す」モデルに加えて、**多ターンの対話セッション**を
+`/jobs` の「一発実行してdiffを返す」モデルに加えて、**多ターンの対話セッション**を
 [Agent Client Protocol (ACP) v1](https://agentclientprotocol.com) 互換の形で提供する。
 
 エディタ（Zed / neovim など）から、リモートのSandbox上のClaude Codeを
@@ -735,7 +736,7 @@ curl -X POST "$URL/acp/sessions/<id>/prompt" -H "authorization: Bearer $TOKEN" \
   "agent_servers": {
     "Remote Claude": {
       "command": "node",
-      "args": ["/absolute/path/to/spindle/infra/remote-claude/cli/acp-bridge.mjs"]
+      "args": ["/absolute/path/to/spindle/cli/acp-bridge.mjs"]
     }
   }
 }

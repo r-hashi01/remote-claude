@@ -42,17 +42,6 @@
     }
   ],
 
-  // Domain state (Project/Task/Event/Update/Output/...) lives here, not in a
-  // Durable Object: DO storage is per-object and cannot serve the cross-project
-  // queries the product needs. See docs/spindle-data-model-v0.1.md.
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "spindle",
-      "database_id": "e55ca88e-1b20-4b7d-9ed4-3c2f6544eccd",
-      "migrations_dir": "migrations"
-    }
-  ],
 
   // Output bodies (patches, log archives). D1 has a 2 MB row limit and these
   // grow without bound, so only the R2 key is stored in the database.
@@ -66,7 +55,7 @@
   "durable_objects": {
     "bindings": [
       { "class_name": "Sandbox", "name": "Sandbox" },
-      { "class_name": "TaskManager", "name": "TASKS" },
+      { "class_name": "JobManager", "name": "JOBS" },
       { "class_name": "AgentSession", "name": "ACP" }
     ]
   },
@@ -79,6 +68,12 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["AgentSession"]
+    },
+    {
+      // remote-claude split out of the spindle repository. This layer owns
+      // jobs; Project/Task/Update/Output moved to the product side.
+      "tag": "v3",
+      "renamed_classes": [{ "from": "TaskManager", "to": "JobManager" }]
     }
   ],
 
@@ -100,7 +95,7 @@
     "CLAUDE_AUTH_MODE": "proxy",
 
     "MAX_CONCURRENCY": "3",
-    "TASK_TIMEOUT_MS": "1800000",
+    "JOB_TIMEOUT_MS": "1800000",
     "CLAUDE_TIMEOUT_MS": "1500000",
     "SANDBOX_SLEEP_AFTER": "5m",
 

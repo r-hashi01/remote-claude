@@ -1,17 +1,15 @@
 import type { AgentSession } from './agent-session';
 import type { Sandbox } from './sandbox';
-import type { TaskManager } from './task-manager';
+import type { JobManager } from './job-manager';
 
 export interface Env {
   // --- Durable Object / container bindings ---
   Sandbox: DurableObjectNamespace<Sandbox>;
-  TASKS: DurableObjectNamespace<TaskManager>;
+  JOBS: DurableObjectNamespace<JobManager>;
   /** One Durable Object per interactive ACP session. */
   ACP: DurableObjectNamespace<AgentSession>;
 
-  /** Domain state: Project / Task / Event / Update / Output / SandboxRun. */
-  DB: D1Database;
-  /** Output bodies (patches, log archives). Only keys are stored in D1. */
+  /** Job artifacts: patch and result bodies. */
   ARTIFACTS: R2Bucket;
 
   // --- Optional R2 binding (WORKSPACE_CACHE=on) ---
@@ -38,7 +36,7 @@ export interface Env {
   DEFAULT_BASE_BRANCH: string;
   CLAUDE_AUTH_MODE?: string;
   MAX_CONCURRENCY?: string;
-  TASK_TIMEOUT_MS?: string;
+  JOB_TIMEOUT_MS?: string;
   CLAUDE_TIMEOUT_MS?: string;
   SANDBOX_SLEEP_AFTER?: string;
   ALLOW_PUSH?: string;
@@ -59,7 +57,7 @@ export interface Env {
  * A task's *work* status (to_do / ready_for_review / ...) is a projection
  * derived from execution outcomes; this is the execution itself.
  */
-export type ExecutionStatus =
+export type JobStatus =
   | 'queued'
   | 'starting'
   | 'running'
@@ -79,10 +77,12 @@ export interface StepResult {
   skipped?: boolean;
 }
 
-export interface TaskRequest {
+export interface JobRequest {
   prompt: string;
   baseBranch?: string;
   repo?: string;
+  /** Work on this branch instead of a generated one. */
+  branch?: string;
   /** Skip lint/test/build even when configured. */
   skipChecks?: boolean;
   /** Leave the sandbox alive after the task for manual inspection. */
@@ -95,14 +95,19 @@ export interface TaskRequest {
  * Input contract for the runner. Built from the durable Task in D1 — this is
  * not itself persisted anywhere.
  */
-export interface TaskRecord {
+export interface JobRecord {
   id: string;
-  status: ExecutionStatus;
+  status: JobStatus;
   prompt: string;
   repo: string;
   baseBranch: string;
   branch: string;
   createdAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+  /** Present on status=failed. Redacted. */
+  error?: string;
+  result?: JobResult;
   options: {
     skipChecks: boolean;
     keepSandbox: boolean;
@@ -110,27 +115,7 @@ export interface TaskRecord {
   };
 }
 
-/** What the HTTP API and CLI see for a task. */
-export interface TaskView {
-  id: string;
-  title: string;
-  prompt: string;
-  /** Work status: to_do | in_progress | waiting | ready_for_review | done | failed */
-  status: string;
-  statusReason: string | null;
-  branch: string | null;
-  baseBranch: string | null;
-  createdAt: number;
-  updatedAt: number;
-  /**
-   * True once nothing further will happen without a new request. Computed
-   * server-side so clients never have to know the status vocabulary.
-   */
-  settled: boolean;
-  result?: TaskResult;
-}
-
-export interface TaskResult {
+export interface JobResult {
   /** Claude Code's final stdout (redacted). */
   claudeOutput: string;
   changed: boolean;

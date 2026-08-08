@@ -3,16 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Run Claude Code inside a Cloudflare Sandbox instead of on the local machine",
+  "description": "Run Claude Code in a Cloudflare Sandbox instead of on your local machine",
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
-    "test": "node src/acp.test.ts",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "wrangler d1 migrations apply spindle --remote",
-    "db:migrate:local": "wrangler d1 migrations apply spindle --local"
+    "test": "node src/acp.test.ts"
   },
   "devDependencies": {
     "@cloudflare/sandbox": "^0.12.4",
@@ -25,7 +22,7 @@
     "esbuild@0.28.1": true,
     "workerd@1.20260801.1": true
   },
-  "dependencies": {
-    "drizzle-orm": "^0.45.2"
+  "bin": {
+    "remote-claude": "./cli/remote-claude.mjs"
   }
 }

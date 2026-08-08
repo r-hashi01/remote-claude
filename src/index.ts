@@ -3,11 +3,11 @@ import { loadConfig } from './config';
 import { getSandboxProvider } from './providers';
 import { createRedactor, patternOnlyRedactor } from './redact';
 import { shellQuote } from './runner';
-import type { Env, TaskRequest } from './types';
+import type { Env, JobRequest } from './types';
 
 // Durable Object classes referenced from wrangler.jsonc.
 export { Sandbox } from './sandbox';
-export { TaskManager } from './task-manager';
+export { JobManager } from './job-manager';
 export { AgentSession } from './agent-session';
 // Required by the Sandbox SDK for container routing.
 export { ContainerProxy } from '@cloudflare/sandbox';
@@ -47,17 +47,17 @@ async function route(request: Request, env: Env): Promise<Response> {
   const denied = authorize(request, env);
   if (denied) return denied;
 
-  const tasks = env.TASKS.get(env.TASKS.idFromName('global'));
+  const jobs = env.JOBS.get(env.JOBS.idFromName('global'));
 
-  if (path === '/tasks' && method === 'POST') {
-    const body = await readJson<TaskRequest>(request);
-    const record = await tasks.createTask(body);
-    return Response.json({ taskId: record.id, status: record.status, branch: record.branch }, { status: 202 });
+  if (path === '/jobs' && method === 'POST') {
+    const body = await readJson<JobRequest>(request);
+    const record = await jobs.createJob(body);
+    return Response.json({ jobId: record.id, status: record.status, branch: record.branch }, { status: 202 });
   }
 
-  if (path === '/tasks' && method === 'GET') {
+  if (path === '/jobs' && method === 'GET') {
     const limit = Number.parseInt(url.searchParams.get('limit') ?? '20', 10);
-    return Response.json({ tasks: await tasks.listTasks(limit) });
+    return Response.json({ tasks: await jobs.listJobs(limit) });
   }
 
   if (path === '/health/auth' && method === 'GET') {
@@ -101,18 +101,18 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
   }
 
-  const match = /^\/tasks\/([A-Za-z0-9-]+)(\/logs|\/diff|\/cancel)?$/.exec(path);
+  const match = /^\/jobs\/([A-Za-z0-9-]+)(\/logs|\/diff|\/cancel)?$/.exec(path);
   if (match) {
     const [, id, suffix] = match;
 
     if (!suffix && method === 'GET') {
-      const record = await tasks.getTask(id);
+      const record = await jobs.getJob(id);
       return record ? Response.json(record) : notFound();
     }
 
     if (suffix === '/logs' && method === 'GET') {
       const since = Number.parseInt(url.searchParams.get('since') ?? '0', 10) || 0;
-      const lines = await tasks.getLogs(id, since);
+      const lines = await jobs.getLogs(id, since);
       if (url.searchParams.get('format') === 'text') {
         const text = lines.map((l) => `[${l.stream}] ${l.line}`).join('\n');
         return new Response(text, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
@@ -121,7 +121,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
 
     if (suffix === '/diff' && method === 'GET') {
-      const patch = await tasks.getPatch(id);
+      const patch = await jobs.getPatch(id);
       if (patch === null) return notFound();
       return new Response(patch, {
         headers: { 'content-type': 'text/x-patch; charset=utf-8' },
@@ -129,8 +129,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
 
     if (suffix === '/cancel' && method === 'POST') {
-      const record = await tasks.cancelTask(id);
-      return record ? Response.json({ taskId: record.id, status: record.status }) : notFound();
+      const record = await jobs.cancelJob(id);
+      return record ? Response.json({ jobId: record.id, status: record.status }) : notFound();
     }
   }
 
