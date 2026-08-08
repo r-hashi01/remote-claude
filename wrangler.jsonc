@@ -27,6 +27,18 @@
     }
   ],
 
+  // Domain state (Project/Task/Event/Update/Output/...) lives here, not in a
+  // Durable Object: DO storage is per-object and cannot serve the cross-project
+  // queries the product needs. See docs/spindle-data-model-v0.1.md.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "spindle",
+      "database_id": "e55ca88e-1b20-4b7d-9ed4-3c2f6544eccd",
+      "migrations_dir": "migrations"
+    }
+  ],
+
   "durable_objects": {
     "bindings": [
       { "class_name": "Sandbox", "name": "Sandbox" },

@@ -9,16 +9,23 @@
     "dev": "wrangler dev",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
-    "test": "node src/acp.test.ts"
+    "test": "node src/acp.test.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "wrangler d1 migrations apply spindle --remote",
+    "db:migrate:local": "wrangler d1 migrations apply spindle --local"
   },
   "devDependencies": {
     "@cloudflare/sandbox": "^0.12.4",
     "@types/node": "^24.10.1",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^5.9.3",
     "wrangler": "^4.119.0"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
     "workerd@1.20260801.1": true
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
   }
 }
