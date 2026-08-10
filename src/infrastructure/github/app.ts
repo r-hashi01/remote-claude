@@ -1,4 +1,6 @@
-import type { Env } from './types';
+import type { GitHubAccess } from '../../application/ports';
+import { repositorySlug } from '../../domain/job/repository';
+import type { Env } from '../env';
 
 /**
  * GitHub App authentication.
@@ -62,6 +64,64 @@ export async function getInstallationToken(env: Env): Promise<string> {
     inflight = null;
   });
   return inflight;
+}
+
+/**
+ * Refuse a repository the GitHub App installation cannot actually reach.
+ *
+ * The authorization boundary for "which repositories may this executor work
+ * on" is the App installation itself, not a list kept here — a second list
+ * would be a second thing to get wrong, and it could only ever be a subset of
+ * what the credential already permits. So this asks GitHub rather than
+ * deciding: what the token can see is the answer.
+ *
+ * Called before a job starts, because the alternative is discovering it during
+ * `git clone` minutes later, as an authentication failure that reads like a
+ * broken deployment rather than a repository nobody granted access to.
+ *
+ * Deliberately not cached. The result is a permission, and a permission that
+ * was revoked five minutes ago is not one.
+ */
+export async function assertRepositoryReachable(env: Env, repoUrl: string): Promise<void> {
+  const slug = repositorySlug(repoUrl);
+  const token = await getInstallationToken(env);
+  const installationId = env.GITHUB_APP_INSTALLATION_ID ?? 'the configured installation';
+
+  const response = await fetch(`https://api.github.com/repos/${slug}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'remote-claude',
+    },
+  });
+
+  if (response.ok) return;
+
+  // 404 rather than 403 is the usual answer for a repository outside the
+  // installation: GitHub does not confirm that private repositories exist to
+  // credentials that cannot see them.
+  if (response.status === 404 || response.status === 403) {
+    throw new Error(
+      `this executor's GitHub App installation cannot reach ${slug}. The repository must be ` +
+        `added to installation ${installationId} (GitHub → Settings → Applications → the App → ` +
+        `Configure → Repository access) before a job can run against it.`
+    );
+  }
+
+  const body = await response.text().catch(() => '');
+  throw new Error(
+    `could not confirm access to ${slug}: GitHub answered ${response.status} ${body.slice(0, 200)}`
+  );
+}
+
+/** The `GitHubAccess` port, bound to this deployment's App installation. */
+export class GitHubAppAccess implements GitHubAccess {
+  constructor(private readonly env: Env) {}
+
+  assertRepositoryReachable(repoUrl: string): Promise<void> {
+    return assertRepositoryReachable(this.env, repoUrl);
+  }
 }
 
 async function mintInstallationToken(config: GitHubAppConfig): Promise<string> {

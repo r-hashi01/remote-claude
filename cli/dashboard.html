@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>remote-claude</title>
+<!-- Inline, so the page makes no request the local server would have to answer. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%232f6f4f'/%3E%3C/svg%3E">
+<!--
+  The dashboard, served by `remote-claude ui` on loopback.
+
+  Why this exists: every field it shows was already stored and already
+  reachable over the API. What was missing was a place to look. Three
+  misdiagnoses in one afternoon each came down to a number nobody could see —
+  lastProgressAt sixteen minutes stale while the job looked healthy, logSeq
+  pinned at zero, a prompt truncated to fifty characters in the only list
+  there was.
+
+  Why it is served locally: it was first served by the Worker, which put a
+  page on the public internet and so invented the question of how a browser
+  proves who it is. Three answers to that question were built and all three
+  were wrong, because the question should not have existed. Whoever wants to
+  watch a job is sitting at the machine that started it, and the token is
+  already in that machine's config file. The local server attaches it; the
+  browser never sees it; nothing new is exposed.
+
+  No build step and no dependencies, on either side.
+-->
+<style>
+  :root {
+    --bg: #fbfbfa;
+    --panel: #ffffff;
+    --line: #e4e2dd;
+    --ink: #1c1b19;
+    --muted: #6f6b64;
+    --faint: #97928a;
+    --accent: #2f6f4f;
+    --warn: #a8641b;
+    --bad: #a33a2c;
+    --code: #f4f3f0;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --panel: #1e1f22;
+      --line: #303237;
+      --ink: #e8e6e3;
+      --muted: #9c988f;
+      --faint: #6e6a63;
+      --accent: #7fc0a0;
+      --warn: #d9a05b;
+      --bad: #e08573;
+      --code: #232528;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.55 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 14px;
+    padding: 12px 18px; border-bottom: 1px solid var(--line);
+    background: var(--panel); position: sticky; top: 0; z-index: 2;
+  }
+  header h1 { font-size: 14px; font-weight: 650; margin: 0; letter-spacing: .01em; }
+  header .meta { color: var(--faint); font-size: 12px; font-family: var(--mono); }
+  main { display: grid; grid-template-columns: minmax(280px, 27%) 1fr; min-height: calc(100vh - 47px); }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+
+  #list { border-right: 1px solid var(--line); overflow-y: auto; max-height: calc(100vh - 47px); }
+  @media (max-width: 860px) { #list { max-height: 40vh; } }
+  .job {
+    padding: 11px 14px; border-bottom: 1px solid var(--line);
+    cursor: pointer; display: block; width: 100%; text-align: left;
+    background: none; border-left: 3px solid transparent; color: inherit; font: inherit;
+  }
+  .job:hover { background: var(--code); }
+  .job[aria-current="true"] { background: var(--code); border-left-color: var(--accent); }
+  .job .top { display: flex; gap: 8px; align-items: center; margin-bottom: 3px; }
+  .job .prompt {
+    color: var(--muted); font-size: 12.5px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .job .foot { color: var(--faint); font-size: 11px; font-family: var(--mono); margin-top: 4px; }
+
+  .badge {
+    font-size: 10.5px; font-family: var(--mono); text-transform: uppercase;
+    letter-spacing: .04em; padding: 1px 6px; border-radius: 3px;
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  }
+  .badge.running, .badge.starting, .badge.queued { color: var(--accent); border-color: currentColor; }
+  .badge.completed { color: var(--muted); }
+  .badge.failed, .badge.cancelled { color: var(--bad); border-color: currentColor; }
+  .live::after {
+    content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px;
+    border-radius: 50%; background: var(--accent); animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
+
+  #detail { padding: 18px 22px; overflow-y: auto; max-height: calc(100vh - 47px); }
+  #detail h2 { font-size: 13px; font-weight: 650; margin: 0 0 10px; letter-spacing: .01em; }
+  .prompt-full {
+    background: var(--code); border: 1px solid var(--line); border-radius: 5px;
+    padding: 11px 13px; white-space: pre-wrap; font-size: 13px; margin-bottom: 16px;
+    max-height: 30vh; overflow-y: auto;
+  }
+  .stats { display: flex; flex-wrap: wrap; gap: 0 26px; margin-bottom: 16px; }
+  .stat { min-width: 96px; }
+  .stat dt { color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; }
+  .stat dd { margin: 1px 0 0; font-family: var(--mono); font-size: 13px; }
+  .stat dd.alert { color: var(--warn); }
+  .stat dd.bad { color: var(--bad); }
+
+  #log {
+    background: var(--code); border: 1px solid var(--line); border-radius: 5px;
+    padding: 10px 12px; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    max-height: 52vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  #log div { padding: 1px 0; }
+  #log .system { color: var(--muted); }
+  #log .stderr { color: var(--bad); }
+  #log .agent { color: var(--faint); }
+  .empty { color: var(--faint); padding: 28px 0; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--code); padding: 1px 4px; border-radius: 3px; }
+  .err { color: var(--bad); white-space: pre-wrap; margin-bottom: 14px; font-size: 13px; }
+  .final { border-left: 2px solid var(--accent); padding-left: 11px; margin: 0 0 16px; white-space: pre-wrap; }
+  a, .linkish { color: var(--accent); }
+  .linkish { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; text-decoration: underline; }
+  pre.diff {
+    background: var(--code); border: 1px solid var(--line); border-radius: 5px;
+    padding: 10px 12px; font-family: var(--mono); font-size: 12px;
+    max-height: 50vh; overflow: auto; margin: 0 0 16px; white-space: pre;
+  }
+  .row { display: flex; gap: 14px; align-items: baseline; margin-bottom: 14px; flex-wrap: wrap; }
+  label.follow { color: var(--faint); font-size: 12px; user-select: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>remote-claude</h1>
+  <span class="meta" id="hdr">connecting…</span>
+</header>
+<main>
+  <div id="list"><div class="empty" style="padding:18px">loading…</div></div>
+  <div id="detail"><div class="empty">select a job</div></div>
+</main>
+<script>
+(function () {
+  "use strict";
+
+  var LIST_MS = 3000;
+  var DETAIL_MS = 1500;
+  var TERMINAL = { completed: 1, failed: 1, cancelled: 1 };
+
+  var selected = null;
+  var since = 0;
+  var lines = [];
+  var follow = true;
+  var detailTimer = null;
+
+  // Straight to the local server, which attaches the token on its way out.
+  // Nothing here holds a credential and nothing here needs one.
+  function api(path) {
+    return fetch(path, { headers: { accept: "application/json" } }).then(function (r) {
+      if (!r.ok) throw new Error(r.status + " " + r.statusText);
+      return r.json();
+    });
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function ago(ts) {
+    if (!ts) return "—";
+    var s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (s < 60) return s + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m" + (s % 60) + "s";
+    return Math.floor(s / 3600) + "h" + Math.floor((s % 3600) / 60) + "m";
+  }
+
+  function span(job) {
+    if (!job.startedAt) return "—";
+    var end = job.finishedAt || Date.now();
+    var s = Math.round((end - job.startedAt) / 1000);
+    return s < 60 ? s + "s" : Math.floor(s / 60) + "m" + (s % 60) + "s";
+  }
+
+  function isLive(job) { return !TERMINAL[job.status]; }
+
+  // ------------------------------------------------------------ the list
+
+  function renderList(jobs) {
+    var el = document.getElementById("list");
+    if (!jobs.length) { el.innerHTML = '<div class="empty" style="padding:18px">no jobs yet</div>'; return; }
+
+    var running = 0;
+    var html = "";
+    for (var i = 0; i < jobs.length; i++) {
+      var j = jobs[i];
+      if (isLive(j)) running++;
+      var cost = j.usage && typeof j.usage.costUsd === "number"
+        ? " · $" + j.usage.costUsd.toFixed(2) : "";
+      var out = j.usage ? " · " + j.usage.outputTokens + " out" : "";
+      html +=
+        '<button class="job" data-id="' + esc(j.id) + '" aria-current="' + (j.id === selected) + '">' +
+          '<div class="top">' +
+            '<span class="badge ' + esc(j.status) + (isLive(j) ? " live" : "") + '">' + esc(j.status) + "</span>" +
+            '<span class="foot" style="margin:0">' + span(j) + "</span>" +
+          "</div>" +
+          '<div class="prompt">' + esc(j.prompt) + "</div>" +
+          '<div class="foot">' + esc(j.id) + out + cost + "</div>" +
+        "</button>";
+    }
+    el.innerHTML = html;
+
+    var buttons = el.querySelectorAll(".job");
+    for (var k = 0; k < buttons.length; k++) {
+      buttons[k].addEventListener("click", function () { select(this.getAttribute("data-id")); });
+    }
+
+    document.getElementById("hdr").textContent =
+      jobs.length + " jobs · " + running + " running · " + new Date().toLocaleTimeString();
+  }
+
+  // ---------------------------------------------------------- the detail
+
+  function statBlock(job) {
+    // Silence is the signal that matters: a job can heartbeat perfectly while
+    // producing nothing, and that gap is what the stall detector acts on.
+    var quiet = job.lastProgressAt ? Math.round((Date.now() - job.lastProgressAt) / 1000) : null;
+    var quietClass = "";
+    if (isLive(job) && quiet !== null && quiet > 600) quietClass = " class=\"bad\"";
+    else if (isLive(job) && quiet !== null && quiet > 120) quietClass = " class=\"alert\"";
+
+    var u = job.usage;
+    var parts = [
+      ["status", esc(job.status)],
+      ["elapsed", span(job)],
+      ["last output", (job.lastProgressAt ? ago(job.lastProgressAt) + " ago" : "never")],
+      ["log seq", String(job.logSeq == null ? 0 : job.logSeq)],
+      ["tokens out", u ? String(u.outputTokens) : "—"],
+      ["turns", u && u.turns ? String(u.turns) : "—"],
+      ["cost", u && typeof u.costUsd === "number" ? "$" + u.costUsd.toFixed(4) : "—"],
+      ["branch", esc(job.branch || "—")]
+    ];
+
+    var html = '<dl class="stats">';
+    for (var i = 0; i < parts.length; i++) {
+      var cls = parts[i][0] === "last output" ? quietClass : "";
+      html += '<div class="stat"><dt>' + parts[i][0] + "</dt><dd" + cls + ">" + parts[i][1] + "</dd></div>";
+    }
+    return html + "</dl>";
+  }
+
+  function renderDetail(job) {
+    var el = document.getElementById("detail");
+    var html = "";
+
+    html += '<div class="row"><h2 style="margin:0">' + esc(job.id) + "</h2>";
+    html += '<label class="follow"><input type="checkbox" id="followBox"' + (follow ? " checked" : "") + "> follow</label>";
+    // Fetched and shown in place rather than linked: a plain link is a
+    // navigation, and a navigation cannot carry the Authorization header this
+    // page authenticates with. It would 401, and look like the page was broken.
+    if (job.result && job.result.diffBytes) {
+      html += '<button id="diffBtn" class="linkish">diff (' + job.result.diffBytes + " bytes)</button>";
+    }
+    html += "</div>";
+
+    if (job.error) html += '<div class="err">' + esc(job.error) + "</div>";
+    html += '<div class="prompt-full">' + esc(job.prompt) + "</div>";
+    html += statBlock(job);
+    if (job.finalText) html += '<div class="final">' + esc(job.finalText) + "</div>";
+    if (job.result && job.result.diffStat) {
+      html += '<div class="prompt-full" style="max-height:none">' + esc(job.result.diffStat) + "</div>";
+    }
+    html += '<div id="diffBox"></div>';
+    html += '<h2>output</h2><div id="log"></div>';
+
+    el.innerHTML = html;
+    document.getElementById("followBox").addEventListener("change", function () { follow = this.checked; });
+
+    var diffBtn = document.getElementById("diffBtn");
+    if (diffBtn) {
+      diffBtn.addEventListener("click", function () {
+        var box = document.getElementById("diffBox");
+        if (box.innerHTML) { box.innerHTML = ""; return; }
+        box.innerHTML = '<div class="empty">loading diff…</div>';
+        fetch("/jobs/" + job.id + "/diff")
+          .then(function (r) { return r.text(); })
+          .then(function (text) {
+            box.innerHTML = '<pre class="diff">' + esc(text) + "</pre>";
+          })
+          .catch(function (e) { box.innerHTML = '<div class="err">' + esc(e.message) + "</div>"; });
+      });
+    }
+
+    paintLog();
+  }
+
+  function paintLog() {
+    var box = document.getElementById("log");
+    if (!box) return;
+    var html = "";
+    for (var i = 0; i < lines.length; i++) {
+      html += '<div class="' + esc(lines[i].stream) + '">' + esc(lines[i].line) + "</div>";
+    }
+    box.innerHTML = html || '<span class="empty">no output yet</span>';
+    if (follow) box.scrollTop = box.scrollHeight;
+  }
+
+  function select(id) {
+    if (selected === id) return;
+    selected = id;
+    since = 0;
+    lines = [];
+    var current = document.querySelectorAll(".job");
+    for (var i = 0; i < current.length; i++) {
+      current[i].setAttribute("aria-current", String(current[i].getAttribute("data-id") === id));
+    }
+    document.getElementById("detail").innerHTML = '<div class="empty">loading…</div>';
+    pollDetail();
+  }
+
+  function pollDetail() {
+    if (detailTimer) { clearTimeout(detailTimer); detailTimer = null; }
+    if (!selected) return;
+    var id = selected;
+
+    Promise.all([api("/jobs/" + id), api("/jobs/" + id + "/logs?since=" + since)])
+      .then(function (res) {
+        if (selected !== id) return;
+        var job = res[0];
+        var got = res[1];
+        if (got.logs && got.logs.length) {
+          lines = lines.concat(got.logs);
+          // The detail pane is a tail, not an archive; the API keeps the rest.
+          if (lines.length > 4000) lines = lines.slice(-4000);
+          since = got.nextSince;
+        }
+        renderDetail(job);
+        // A settled job cannot change. Stop asking.
+        if (isLive(job)) detailTimer = setTimeout(pollDetail, DETAIL_MS);
+      })
+      .catch(function (e) {
+        if (selected !== id) return;
+        document.getElementById("detail").innerHTML = '<div class="err">' + esc(e.message) + "</div>";
+      });
+  }
+
+  function pollList() {
+    api("/jobs?limit=25&summary=1")
+      .then(function (data) {
+        var jobs = data.tasks || [];
+        renderList(jobs);
+        // Land on something useful without a click: whatever is running, else
+        // the newest. Only on first load — never yank a selection away.
+        if (!selected && jobs.length) {
+          var live = null;
+          for (var i = 0; i < jobs.length; i++) if (isLive(jobs[i])) { live = jobs[i]; break; }
+          select((live || jobs[0]).id);
+        }
+      })
+      .catch(function (e) {
+        document.getElementById("hdr").textContent = "error: " + e.message;
+      })
+      .then(function () { setTimeout(pollList, LIST_MS); });
+  }
+
+  pollList();
+})();
+</script>
+</body>
+</html>

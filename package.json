@@ -9,7 +9,10 @@
     "dev": "wrangler dev",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
-    "test": "node src/acp.test.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "sdk:build": "npm --prefix sdk run build",
+    "sdk:typecheck": "npm --prefix sdk run typecheck",
     "embed": "node scripts/embed-runner.mjs",
     "pretypecheck": "node scripts/embed-runner.mjs",
     "run:local": "node scripts/run-locally.mjs"
@@ -19,6 +22,7 @@
     "@types/node": "^24.10.1",
     "drizzle-kit": "^0.31.10",
     "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
     "wrangler": "^4.119.0"
   },
   "allowScripts": {

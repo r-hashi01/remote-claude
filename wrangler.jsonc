@@ -88,8 +88,8 @@
   ],
 
   "vars": {
-    // Repository this environment works on. Overridable per task only if
-    // ALLOW_CUSTOM_REPO is "true" (off by default - see README security notes).
+    // Repository this environment works on when a job does not name one.
+    // Overridable per job when ALLOW_CUSTOM_REPO is "true" (see below).
     "REPO_URL": "https://github.com/r-hashi01/spindle.git",
     "DEFAULT_BASE_BRANCH": "main",
 
@@ -113,9 +113,18 @@
     // sandbox can stay awake.
     "SANDBOX_SLEEP_AFTER": "2m",
 
-    // Safety switches. Both off by default.
     "ALLOW_PUSH": "false",
-    "ALLOW_CUSTOM_REPO": "false",
+
+    // Whether a job may name a repository other than REPO_URL.
+    //
+    // On, because a product that manages more than one project cannot use an
+    // executor pinned to one repository. This is not the same as accepting
+    // arbitrary input: the reachable set is exactly what this deployment's
+    // GitHub App installation can see, checked against GitHub before a job
+    // starts, and the URL itself still has to be https on github.com with no
+    // embedded credentials. Narrowing it is done by removing repositories from
+    // the App installation, not by editing a list here.
+    "ALLOW_CUSTOM_REPO": "true",
 
     // "off" | "on". "on" additionally requires the R2 config below.
     "WORKSPACE_CACHE": "off",
@@ -130,6 +139,25 @@
     // worth remembering whenever the target repo is restructured.
     // `ci` rather than `install`: install rewrites package-lock.json, and that
     // churn then shows up in the job's diff as changes nobody asked for.
+    //
+    // These want to be root-level and package-agnostic:
+    //
+    //   "INSTALL_COMMAND": "npm ci --no-audit --no-fund",
+    //   "LINT_COMMAND": "npm run typecheck",
+    //
+    // Naming packages/spindle-core meant that when apps/web arrived the
+    // pipeline stopped checking the new code and said nothing — a job passed
+    // lint with a typecheck that was broken in a fresh checkout.
+    //
+    // They are not switched yet, because these run against what GitHub has,
+    // not what is on anyone's disk. spindle's workspace root — the root
+    // package.json and the lockfile moved up from packages/spindle-core — is
+    // still uncommitted locally. `npm ci` with no root package.json exits
+    // non-zero, and install is not allowFailure, so every job would die before
+    // reaching the agent.
+    //
+    // Switch both lines the moment that lands on origin/main. Nothing else
+    // needs to change.
     "INSTALL_COMMAND": "npm --prefix packages/spindle-core ci --no-audit --no-fund",
     "LINT_COMMAND": "npm --prefix packages/spindle-core run typecheck",
     // spindle has no test suite yet; typecheck above is the only gate.

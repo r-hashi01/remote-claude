@@ -24,8 +24,8 @@ Local Mac
    v
 Cloudflare Worker  ── control plane のみ。ここではClaude Codeを実行しない
    |
-   +-- TaskManager (Durable Object)
-   |     task状態 / logs / patch を SQLite に保持
+   +-- JobManager (Durable Object)
+   |     ジョブ状態 / logs を SQLite に、patch を R2 に保持
    |     同時実行数のゲート (MAX_CONCURRENCY)
    |
    | Sandbox SDK
@@ -52,21 +52,46 @@ Cloudflare Sandbox / Container   ── 1 task = 1 Sandbox
 
 ### ファイル構成
 
+4層に分ける。**依存の矢印は内向きだけ**（ADR 0008）。
+
 ```text
-  wrangler.jsonc      Worker/Container/DO/varsの設定
-  Dockerfile          Sandbox image (claude + toolchain)
-  src/
-    index.ts          Worker entry。routing・bearer認証・DO/Sandboxのexport
-    sandbox.ts        Sandbox subclass。network allowlist と credential注入
-    job-manager.ts    JobManager DO。ジョブ状態・logs・queue・同時実行数
-    runner.ts         Sandbox内で実行するpipeline本体
-    config.ts         env varsのparseとdefault
-    github-app.ts     GitHub App JWT署名とinstallation tokenの発行/cache
-    redact.ts         secret masking
-    types.ts          共有型
-  cli/remote-claude.mjs   ローカルCLI (依存なし)
-.github/workflows/
-  deploy.yml          push時にdeploy
+wrangler.jsonc        Worker/Container/DO/varsの設定
+Dockerfile            Sandbox image (claude + toolchain)
+src/
+  index.ts            entry。DO の export と error→status の対応だけ
+  interface/http/     HTTPを受けてJSONを返す。何も判断しない
+    router.ts           routing
+    auth.ts             bearer認証
+  application/        ユースケース。ポート越しに書かれている
+    ports/              外界に要求するもの (store / sandbox / github / clock ...)
+    job-service.ts      ジョブの受付・起動・追跡・後始末
+    testing.ts          ポートのインメモリ実装 (テスト専用)
+  domain/             規則。ここは何もimportしない
+    job/                Job集約・状態遷移・prompt/branch/repoの規則・生存判定
+    agent/acp.ts        Claude Codeイベント → ACP の翻訳
+    sandbox/ledger.ts   確保したsandboxと回収の規則
+    redaction/          secret masking
+    shell/quote.ts      shell引数のquote
+  infrastructure/     ポートの実装
+    durable-objects/    JobManager / AgentSession / Sandbox
+    persistence/        DO SQLite と R2
+    github/app.ts       GitHub App JWT署名・installation token・到達性確認
+    sandbox/            Cloudflare Sandbox SDK adapter
+    config.ts           env varsのparseとdefault
+  sdk-contract.ts     SDKの型がAPIと一致していることのcompile-time検査
+container/runner.mjs  Sandbox内で実行するpipeline本体 (ADR 0004)
+sdk/                  利用者向けクライアント (npm package・下記「SDK」)
+cli/remote-claude.mjs  ローカルCLI (依存なし)
+.github/workflows/deploy.yml   push時にdeploy
+```
+
+`domain` と `application` はネットワークもworkerdも使わずにテストできる。
+`npm test` (vitest) がそこを覆っている。
+
+```bash
+npm test             # domain / application / sdk
+npm run typecheck    # Worker (テストも含む)
+npm run sdk:typecheck
 ```
 
 ---
@@ -89,7 +114,7 @@ Cloudflare Sandbox / Container   ── 1 task = 1 Sandbox
 
 同じ仕組みでGitHub Appのinstallation tokenも注入するので、**tokenをclone URLに埋め込まない**（`git remote -v` にも `.git/config` にも出ない）。
 installation tokenはGitHub Appの秘密鍵から都度JWTを署名して取得する短命（最大1時間）のtokenで、
-Worker側（`src/github-app.ts`）でのみ生成・保持され、container内には一切渡らない。
+Worker側（`src/infrastructure/github/app.ts`）でのみ生成・保持され、container内には一切渡らない。
 
 ### `CLAUDE_AUTH_MODE=direct`
 
@@ -379,7 +404,67 @@ curl -X POST https://remote-claude.<subdomain>.workers.dev/jobs \
 ```
 
 ```json
-{ "jobId": "m9x2k1-4f8a2b1c", "status": "queued", "branch": "claude/m9x2k1-4f8a2b1c" }
+{
+  "id": "m9x2k1-4f8a2b1c",
+  "jobId": "m9x2k1-4f8a2b1c",
+  "status": "queued",
+  "prompt": "このバグを修正して",
+  "repo": "https://github.com/r-hashi01/spindle.git",
+  "baseBranch": "main",
+  "branch": "claude/m9x2k1-4f8a2b1c",
+  "createdAt": 1775000000000,
+  "options": { "skipChecks": false, "keepSandbox": false, "push": false }
+}
+```
+
+`jobId` は互換のために残している。**新しいコードは `id` を使う**（他のendpointと同じ名前）。
+`GET /jobs` も同じ配列を `jobs` と `tasks` の両方の名前で返す。
+
+---
+
+## SDK
+
+HTTPを手で書かないための typed client。`sdk/` にあり、npm packageとして publish できる。
+
+```bash
+npm install @r-hashi01/remote-claude-client
+```
+
+```ts
+import { createClient } from '@r-hashi01/remote-claude-client';
+
+const rc = createClient({ url: process.env.REMOTE_CLAUDE_URL!, token: process.env.REMOTE_CLAUDE_TOKEN! });
+
+const job = await rc.startJob({
+  prompt: 'ログイン時の500エラーを調査して修正して',
+  repo: 'https://github.com/acme/app.git',   // ALLOW_CUSTOM_REPO=true のとき
+});
+
+const finished = await rc.waitForJob(job.id, {
+  onLog: (lines) => lines.forEach((l) => console.log(l.line)),
+});
+
+if (finished.status === 'completed') {
+  const patch = await rc.getDiff(job.id);
+}
+```
+
+- `waitForJob` は失敗・キャンセルでも**throwせずrecordを返す**。それは例外ではなく結果なので、
+  `status` と `error` を読む
+- `describeOutcome(job)` が「差分あり / 走ったが何も変わらず / 失敗」を1行にする
+- config を持ち回る関数形（`startJob(config, input)`）も同じ操作で公開している
+- 層は executor と同じ（`domain` / `application` / `infrastructure`）。transport を差し替えるなら
+  `JobGateway` を実装する
+
+型は SDK 側で再宣言してあるが、`src/sdk-contract.ts` が**APIと食い違ったら `npm run typecheck` を落とす**
+（ADR 0009）。
+
+publishする側の手順:
+
+```bash
+npm run sdk:typecheck
+npm run sdk:build          # dist/ に .js と .d.ts
+npm --prefix sdk publish   # 初回は npm login とscopeの用意が必要
 ```
 
 ### status の遷移
@@ -427,7 +512,7 @@ task完了後は `status` で以下が確認できる。
 - lint / test / build の結果
 - 各stepのexit code と所要時間
 
-**すべての出力は保存前にredactionを通している**（`src/redact.ts`）。
+**すべての出力は保存前にredactionを通している**（`src/domain/redaction/redactor.ts`）。
 既知のsecret値そのものに加え、`sk-ant-*` / `ghp_*` / `ghs_*`（GitHub App installation token）/
 `github_pat_*` / `Authorization:` ヘッダ / URL埋め込みcredential をパターンでもマスクする。
 secretはAPI responseにも出ない。
@@ -544,7 +629,7 @@ npx wrangler r2 bucket delete remote-claude-cache   # 完全に廃止する場�
 | `CLAUDE_TIMEOUT_MS` | `1500000` (25分) | claude単体のtimeout |
 | `SANDBOX_SLEEP_AFTER` | `5m` | idle後にsleepするまで |
 | `ALLOW_PUSH` | `false` | pushを許可するか |
-| `ALLOW_CUSTOM_REPO` | `false` | task毎に別repoを指定できるか |
+| `ALLOW_CUSTOM_REPO` | `true` | job毎に別repoを指定できるか（下記） |
 | `WORKSPACE_CACHE` | `off` | R2 workspace cache |
 | `SANDBOX_ALLOWED_HOSTS` | 下記 | Sandboxの通信許可先 |
 | `INSTALL_COMMAND` | `""` | 空ならskip |
@@ -568,7 +653,7 @@ npx wrangler r2 bucket delete remote-claude-cache   # 完全に廃止する場�
 | Credential isolation | proxyモードでは実tokenがcontainerに存在しない |
 | Secret masking | 全出力を `redact.ts` 経由。既知値＋パターンの二重マスク |
 | Command injection | 外部由来の文字列はすべて `shellQuote()` で単一引用符化 |
-| Arbitrary repository URL | 既定で拒否。許可時もhttps / github.com / credential無し のみ |
+| Arbitrary repository URL | https / github.com / credential無し のみ。さらに**GitHub App installationが到達できるrepoに限る**（受付時にGitHubへ確認） |
 | API authentication | bearer token必須。`crypto.subtle.timingSafeEqual` で比較。**未設定なら全リクエストを503で拒否（fail closed）** |
 | Task timeout | task/claude それぞれにtimeout。`AbortSignal` でcancel伝播 |
 | Network access | deny-by-default。allowlist外は遮断。DNSはCloudflare固定 |
@@ -578,7 +663,32 @@ npx wrangler r2 bucket delete remote-claude-cache   # 完全に廃止する場�
 それに加えてCloudflare Accessを重ねること。
 
 この環境は**個人利用専用**。第三者のリクエストを自分のsubscription credentialで処理する構成にはしないこと
-（Anthropicの利用規約違反になる）。`ALLOW_CUSTOM_REPO=false` はそのための歯止めでもある。
+（Anthropicの利用規約違反になる）。歯止めは `REMOTE_CLAUDE_TOKEN` とCloudflare Accessであって、
+repoの数ではない。
+
+### 別のrepositoryを指定する
+
+`ALLOW_CUSTOM_REPO=true`（既定）なら `POST /jobs` に `repo` を渡せる。
+**どのrepoで走らせられるかを決めるのは、この設定ではなくcredentialの到達範囲**（ADR 0010）:
+
+1. URLの形を検査する — https / `github.com` / credential埋め込み無し
+2. **GitHub App installation がそのrepoを見えるかGitHubに問い合わせる。**
+   見えなければ `400` で拒否し、**cloneまで待たない**
+3. `REPO_URL` と同じrepoを別の書き方（`.git` の有無・末尾スラッシュ・大文字小文字）で
+   渡した場合は「別repo指定」とは扱わない
+
+許可リストは持たない。持てば installation が許すものの部分集合を二重管理することになり、
+必ず古くなる。**狭めたいときは GitHub App installation から repository を外す。**
+
+`ALLOW_CUSTOM_REPO=false` にした deployment が `repo` を受けた場合、
+エラーには両方のrepo名と「executor側の設定である」ことが入る:
+
+```
+this executor is pinned to https://github.com/r-hashi01/spindle.git and will not run
+against https://github.com/acme/app.git: custom repositories are disabled on the
+executor. Set ALLOW_CUSTOM_REPO=true in its wrangler.jsonc vars and redeploy, or
+point it at that repository.
+```
 
 ---
 

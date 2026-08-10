@@ -94,9 +94,20 @@ GitHub App の権限を Contents: Read and write に上げる必要がある。
 ACP レイヤーは実装済みだがジョブ経路に繋がっていない。**一発勝負では投げられないタスク**が
 存在することは既に判明している（設計判断を含むもの、途中で方針が変わるもの）。
 
-### RC-8. 複数リポジトリ
+### ~~RC-8. 複数リポジトリ~~ → 対応済み（ADR 0010）
 
-`ALLOW_CUSTOM_REPO` は実装済みだが未検証。spindle 以外を扱うなら必要。
+利用者から「`repo` を渡すと拒否される。任意の Project を扱うプロダクトからは必須」と指摘があり、
+既定を `ALLOW_CUSTOM_REPO=true` にした。許可の境界は設定ではなく
+**GitHub App installation が到達できる範囲**で、受付時に GitHub に確認する。
+
+**残っている未検証**: live deployment に対して、installation 内の別 repo で
+実際にジョブを完走させること。ユニットテストは
+`src/application/job-service.test.ts` が覆っている（許可・拒否・到達不可・同一repoの別表記）。
+
+### RC-9. SDK の publish
+
+`sdk/` は package として成立していて CI が build まで通すが、**まだ npm に publish していない**。
+それまで利用者は git 経由で参照するか vendor する必要がある（ADR 0009）。
 
 ---
 

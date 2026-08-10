@@ -1,16 +1,17 @@
 import { DurableObject } from 'cloudflare:workers';
-import { getSandboxProvider, type SandboxSession } from './providers';
+import { getSandboxProvider } from '../sandbox';
+import type { SandboxSession } from '../../application/ports';
 import {
   NdjsonBuffer,
   rpcNotify,
   translateEvent,
   type SessionUpdate,
   type StopReason,
-} from './acp';
-import { loadConfig, type Config } from './config';
-import { createRedactor, type Redactor } from './redact';
-import { shellQuote } from './shell';
-import type { Env } from './types';
+} from '../../domain/agent/acp';
+import { loadConfig, type Config } from '../config';
+import { createRedactor, type Redactor } from '../../domain/redaction/redactor';
+import { shellQuote } from '../../domain/shell/quote';
+import type { Env } from '../env';
 
 const REPO_DIR = '/workspace/repo';
 const MAX_UPDATES = 10_000;

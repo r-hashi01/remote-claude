@@ -31,13 +31,24 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      # A separate package with its own lockfile, so it needs its own install.
+      # Built here rather than only at publish time: the SDK describes this API,
+      # and a client that no longer compiles against it is a broken deploy that
+      # nobody would notice until someone tried to install it.
+      - name: Install SDK dependencies
+        run: npm --prefix sdk install --no-audit --no-fund
+
       - name: Typecheck
         run: |
           npx wrangler types
           npm run typecheck
+          npm run sdk:typecheck
 
       - name: Test
         run: npm test
+
+      - name: Build SDK
+        run: npm run sdk:build
 
       - name: Deploy Worker and container image
         run: npx wrangler deploy

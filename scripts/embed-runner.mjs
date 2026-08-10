@@ -28,5 +28,5 @@ const generated = `// GENERATED — do not edit.
 export const RUNNER_SOURCE = ${JSON.stringify(source)};
 `;
 
-writeFileSync(join(root, 'src/runner-source.ts'), generated);
+writeFileSync(join(root, 'src/infrastructure/runner-source.ts'), generated);
 process.stderr.write(`embedded container/runner.mjs (${source.length} bytes)\n`);

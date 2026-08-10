@@ -1,6 +1,6 @@
 import { CloudflareSandboxProvider } from './cloudflare';
-import type { SandboxProvider } from './types';
-import type { Env } from '../types';
+import type { SandboxProvider } from '../../application/ports/sandbox';
+import type { Env } from '../env';
 
 export type {
   CloneOptions,
@@ -11,7 +11,7 @@ export type {
   SandboxSession,
   SnapshotOptions,
   SnapshotRef,
-} from './types';
+} from '../../application/ports/sandbox';
 
 /**
  * Resolve the configured sandbox provider.

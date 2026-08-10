@@ -1,0 +1,7 @@
+{
+  // What gets published: the library, without its tests or the in-memory
+  // gateway they run against. `tsconfig.json` keeps those in scope so
+  // `npm run typecheck` still checks them.
+  "extends": "./tsconfig.json",
+  "exclude": ["src/**/*.test.ts", "src/application/testing.ts"]
+}

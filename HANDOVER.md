@@ -7,7 +7,8 @@
 remote-claude は **開発基盤として一応動く**。実ジョブが完走し、diff が返り、
 `remote-claude apply` でローカルに適用できる。ロードマップの P0 は完了している。
 
-ただし**進行中の未完了作業が1つある**（下記「未解決」）。
+前回の引き継ぎにあった未解決（進捗行とトークン消費量が出ない）は**解決済み**。
+経緯は下記「解決した問題」に残した。**未完了の作業はいまは無い。**
 
 ## 動くことが確認済みのもの
 
@@ -19,36 +20,50 @@ remote-claude は **開発基盤として一応動く**。実ジョブが完走�
 | Sandbox の確保と回収 | `remote-claude sandboxes`（outstanding 0） |
 | Worker 再起動時のジョブ継続 | 実装済み（意図的な再起動での確認は未実施） |
 | ログの完全性 | 全ステップが揃うことを確認 |
+| 進捗行とトークン消費量 | 実ジョブ2回。下記の出力 |
 
-## 未解決 — ここから再開する
+実ジョブでこう出る。
 
-### 症状
+```
+· ▶ claude-code
+  · Read repo-url.ts
+  · Edit repo-url.ts
+  repositorySlug 関数のJSDocコメントを…更新しました
+· usage: 6 in / 562 out, 3 turns
 
-Claude Code の実行を `--output-format stream-json` に切り替え、そのイベントを
-Worker 側の `translateEvent`（`src/acp.ts`）で解釈して、
+status   completed
+usage    6 in / 417 out, 3 turns, $0.0867
+```
 
-1. 進捗行（`· reading foo.ts` など）
-2. トークン消費量
+## 解決した問題 — 進捗行とトークン消費量が出なかった件
 
-を出す、という変更を入れた。**最終メッセージは出るが、この2つが出ない。**
+**翻訳層は最初から正しかった。壊れていたのは配送。**
 
-### 分かっていること
+`--output-format stream-json` に対応した runner を書いたが、埋め込み
+(`scripts/embed-runner.mjs`) は npm の `predeploy` フックでしか走らず、
+`npx wrangler deploy` を直接叩くと発火しない。**deploy は古い
+`src/runner-source.ts` を出荷していた**ので、コンテナの中では
+`--output-format` の付かない `claude -p` が動いていた。
+agent イベントは1つも生まれておらず、Worker 側には翻訳するものが無かった。
 
-- runner はイベントを出している。ローカル実行で `agent` ストリームが30行確認できた
-  ```
-  {'system': 31, 'stderr': 1, 'agent': 30, 'stdout': 16}
-  ```
-- `claude -p --output-format stream-json --verbose` 自体は正しく NDJSON を出す（ローカルで確認）
-- 直前に1つ修正した: `capture` が `onLine` 設定時に **stderr も agent イベントとして流していた**。
-  非JSONの警告行が混ざってパースに失敗する。stdout のみに限定済み。**この修正の効果は未検証**
+決め手は最初から手元にあった。失敗したジョブの `result.claudeOutput` が
+NDJSON ではなく平文だった（`remote-claude status <id> --json` で読める）。
+これを先に見ていれば「runner が stream-json を出していない」と即断できた。
 
-### 次にやること
+対策は ADR 0007 の訂正に記録した。要点だけ:
 
-1. `npm run run:local -- <repo> "<prompt>"` で実行し、`log.ndjson` の `agent` 行を
-   1件ずつ `translateEvent` に通して、何が返るか確認する。
-   ローカルなら数秒で回る。deploy して実ジョブを流すと1周4分かかる
-2. `tool_use` を含む `assistant` イベントが来ているか。来ていれば `describeUpdate` の側の問題
-3. `result` イベントに `usage` が入っているか
+- 埋め込みを `wrangler.jsonc` の `build.command` に移した。迂回できない
+- `src/runner-source.ts` を `.gitignore` に入れた。コミットされた生成物は
+  runner の2つ目のコピーであり、実際に stale だった
+
+ついでに2つ直した。
+
+- **runner の子プロセスの stdin を閉じた**（`stdio: ['ignore', …]`）。
+  `claude -p` が入力を3秒待ち、`Warning: no stdin data received in 3s` を
+  出力ストリームに書き込んでいた。NDJSON チャンネルに非JSONが混ざる
+- **`--- claude ---` に `finalText` を出すようにした**。`result.claudeOutput` は
+  stream-json 化で生のイベント列になっており、人が読むものではなくなっていた。
+  `JobRecord.finalText` / `JobRecord.usage` を `result` イベントから記録している
 
 ### 罠
 
@@ -59,16 +74,7 @@ Worker 側の `translateEvent`（`src/acp.ts`）で解釈して、
 
 ## 未コミットの変更
 
-すべて `remote-claude` リポジトリ。型チェックとテストは通っている。
-
-```
-container/runner.mjs    stream-json化、agentイベント出力、stderr分離
-src/acp.ts              usage を TranslationOutput に追加、describeUpdate を追加
-src/job-manager.ts      agentイベントを translateEvent 経由で解釈、usage記録、stall検知
-src/types.ts            JobUsage、lastProgressAt、usage
-scripts/run-locally.mjs ローカル実行ハーネス（新規）
-wrangler.jsonc          build.command で埋め込みを強制
-```
+無し。deploy 済み（動作確認したのは version `8cd083da`）。
 
 ## どこで作業するか
 
@@ -98,7 +104,7 @@ npx wrangler deploy && remote-claude "<prompt>"
 
 ## この作業で繰り返した失敗
 
-同じ形の失敗を3回している。**次も踏む可能性が高い。**
+同じ形の失敗を**4回**している。**次も踏む可能性が高い。**
 
 1. **持っている情報を使っていない** — `runner.out`、トークン使用量、`logSeq`。
    いずれも手元にあったのに読んでいなかった
@@ -107,5 +113,12 @@ npx wrangler deploy && remote-claude "<prompt>"
    **自分が実際に使う経路を確認せずにガードを置いた**
 3. **隔離の前提を外した** — runner は Sandbox で動く前提のコードなのに、
    ローカルの実リポジトリへ向けて実行し、ファイルを消失させた
+4. **1 と 2 が同時に起きた**（進捗行が出なかった件）。predeploy を迂回して古い
+   runner を出荷し、その古い runner の出力を新しいコードの不具合として追った。
+   `result.claudeOutput` を一度見れば終わっていた
 
 いずれも「検証する仕組みを足す」より「**その状況が起きえない構造にする**」ほうが正しかった。
+
+そして 4 から一つ足すなら —
+**症状を出した対象が、いま疑っているコードと同じものか先に確かめる。**
+違えば、どれだけ正しいコードでも何時間でも疑える。
