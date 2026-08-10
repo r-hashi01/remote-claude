@@ -1,4 +1,5 @@
 import type { GitHubAccess } from '../../application/ports';
+import { canPush, type InstallationPermissions } from '../../domain/job/permissions';
 import { repositorySlug } from '../../domain/job/repository';
 import type { Env } from '../env';
 
@@ -34,6 +35,14 @@ export function loadGitHubAppConfig(env: Env): GitHubAppConfig | null {
 interface CachedToken {
   token: string;
   expiresAt: number;
+  /**
+   * What this token is allowed to do, as GitHub reported when minting it.
+   *
+   * Kept with the token because it describes that token. Asking a repository
+   * endpoint instead reads a field installation tokens do not carry — which is
+   * how the first write check came to refuse everything.
+   */
+  permissions: InstallationPermissions;
 }
 
 /**
@@ -105,14 +114,12 @@ export async function assertRepositoryReachable(env: Env, repoUrl: string): Prom
  */
 export async function assertRepositoryWritable(env: Env, repoUrl: string): Promise<void> {
   const slug = repositorySlug(repoUrl);
-  const repository = await fetchRepository(env, slug);
 
-  if (repository === null) {
-    throw new Error(
-      `this executor's GitHub App installation cannot reach ${slug}, so it cannot push to it.`
-    );
-  }
-  if (repository.permissions?.push !== true) {
+  // Reachable first: an installation with contents:write still cannot push to a
+  // repository it was never given.
+  await assertRepositoryReachable(env, repoUrl);
+
+  if (!canPush(await installationPermissions(env))) {
     throw new Error(
       `this executor's GitHub App installation cannot write to ${slug}. Its Contents permission ` +
         'must be Read and write for a job to push (GitHub → Settings → Developer settings → ' +
@@ -120,6 +127,13 @@ export async function assertRepositoryWritable(env: Env, repoUrl: string): Promi
         'installation before they take effect.'
     );
   }
+}
+
+/** What the current installation token is allowed to do. */
+export async function installationPermissions(env: Env): Promise<InstallationPermissions> {
+  // Minting populates the cache; the permissions come back with the token.
+  await getInstallationToken(env);
+  return cached?.permissions ?? {};
 }
 
 /** The `GitHubAccess` port, bound to this deployment's App installation. */
@@ -135,12 +149,8 @@ export class GitHubAppAccess implements GitHubAccess {
   }
 }
 
-interface Repository {
-  permissions?: { push?: boolean; pull?: boolean; admin?: boolean };
-}
-
-/** The repository as this installation sees it, or null when it cannot see it. */
-async function fetchRepository(env: Env, slug: string): Promise<Repository | null> {
+/** Whether this installation can see the repository at all. */
+async function fetchRepository(env: Env, slug: string): Promise<object | null> {
   const token = await getInstallationToken(env);
   const response = await fetch(`https://api.github.com/repos/${slug}`, {
     headers: {
@@ -161,7 +171,7 @@ async function fetchRepository(env: Env, slug: string): Promise<Repository | nul
       `could not read ${slug} from GitHub: ${response.status} ${body.slice(0, 200)}`
     );
   }
-  return (await response.json()) as Repository;
+  return (await response.json()) as object;
 }
 
 async function mintInstallationToken(config: GitHubAppConfig): Promise<string> {
@@ -185,11 +195,16 @@ async function mintInstallationToken(config: GitHubAppConfig): Promise<string> {
     throw new Error(`failed to mint GitHub App installation token (${response.status}): ${body.slice(0, 300)}`);
   }
 
-  const data = (await response.json()) as { token: string; expires_at: string };
+  const data = (await response.json()) as {
+    token: string;
+    expires_at: string;
+    permissions?: InstallationPermissions;
+  };
   const parsedExpiry = Date.parse(data.expires_at);
   cached = {
     token: data.token,
     expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : Date.now() + 55 * 60 * 1000,
+    permissions: data.permissions ?? {},
   };
   return cached.token;
 }
