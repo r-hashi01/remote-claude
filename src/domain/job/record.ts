@@ -1,8 +1,10 @@
+import type { PullRequestRequest } from './pull-request';
 import type { JobStatus } from './status';
 
 // Re-exported so callers that need a record and its status do not have to know
 // which of the two files each lives in.
 export type { JobStatus } from './status';
+export type { PullRequestRequest } from './pull-request';
 
 /**
  * The persisted and published shape of a job.
@@ -110,6 +112,16 @@ export interface JobRecord {
    * configured for. Only the keys given are overridden.
    */
   commands?: Partial<JobCommands>;
+  /** Open a pull request when the work lands. Implies a push. */
+  pullRequest?: PullRequestRequest;
+  /**
+   * The pull request this job opened.
+   *
+   * Present only once it exists. A branch that was pushed but whose pull request
+   * could not be opened keeps the branch — the work is still there — so the
+   * absence of this is not the absence of a result.
+   */
+  pullRequestUrl?: string;
 }
 
 /**
@@ -144,6 +156,14 @@ export interface JobRequest {
   keepSandbox?: boolean;
   /** Push the branch to origin. Requires ALLOW_PUSH=true on the Worker. */
   push?: boolean;
+  /**
+   * Open a pull request for the branch. Implies `push`.
+   *
+   * Every field is optional: the executor composes a title from the prompt and a
+   * body from what its own pipeline observed. A caller with more context — which
+   * work item this was — should override them.
+   */
+  pullRequest?: PullRequestRequest;
 }
 
 /**

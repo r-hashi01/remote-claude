@@ -80,6 +80,13 @@ export interface JobOptions {
  * An empty string means "skip this step", which is a real instruction rather
  * than a missing value.
  */
+/** What a job asks for when it wants its work opened as a pull request. */
+export interface PullRequestRequest {
+  title?: string;
+  body?: string;
+  draft?: boolean;
+}
+
 export interface JobCommands {
   install: string;
   lint: string;
@@ -113,6 +120,15 @@ export interface JobRecord {
   options: JobOptions;
   /** Commands this job runs instead of the deployment's. */
   commands?: Partial<JobCommands>;
+  /** What this job asked for, if it asked for a pull request. */
+  pullRequest?: PullRequestRequest;
+  /**
+   * The pull request the executor opened.
+   *
+   * Absent when none was asked for, or when opening one failed — the branch is
+   * still pushed in that case, so absence here is not absence of a result.
+   */
+  pullRequestUrl?: string;
 }
 
 /**
@@ -159,6 +175,15 @@ export interface StartJob {
   keepSandbox?: boolean;
   /** Push the branch. Requires `ALLOW_PUSH=true` on the executor. */
   push?: boolean;
+  /**
+   * Open a pull request for the branch. Implies `push`.
+   *
+   * Every field is optional: the executor composes a title from the prompt and a
+   * body from what its own pipeline observed — the diffstat and the checks it
+   * ran, not the agent's account of itself. A caller that knows which work item
+   * this was should override them.
+   */
+  pullRequest?: PullRequestRequest;
 }
 
 export type LogStream = 'system' | 'stdout' | 'stderr';

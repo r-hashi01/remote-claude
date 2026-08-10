@@ -420,6 +420,32 @@ curl -X POST https://remote-claude.<subdomain>.workers.dev/jobs \
 `jobId` は互換のために残している。**新しいコードは `id` を使う**（他のendpointと同じ名前）。
 `GET /jobs` も同じ配列を `jobs` と `tasks` の両方の名前で返す。
 
+### PR まで開かせる
+
+`pullRequest` を渡すと、成果を push してそのまま pull request を開く（**push を含む**）:
+
+```jsonc
+{
+  "prompt": "...",
+  "pullRequest": {}                       // 全部省略できる
+}
+```
+
+省略したフィールドは executor が組む。**タイトルはプロンプトの1行目、本文は
+executor 自身が観測したもの** — diffstat と、実際に走った install/lint/test の結果。
+**agent の締めの発言は入れない**（レビュー対象が書いた要約なので、マージの根拠にはならない）。
+呼び出し側が文脈を持っているなら上書きする:
+
+```jsonc
+{ "pullRequest": { "title": "P0-4: Task を sandbox run に繋ぐ", "draft": true } }
+```
+
+CLI なら `--pr`。開いた PR の URL は `pullRequestUrl` に入り、`remote-claude status` に出る。
+
+必要な権限は Contents: Read and write と **Pull requests: Read and write**。
+足りなければ**受付時に**どちらが足りないかを言って拒否する。
+**PR を開けなくてもジョブは失敗しない** — ブランチは push 済みなので、手で開けばいい。
+
 ### job ごとに commands を渡す
 
 `INSTALL_COMMAND` などは deployment 単位の既定値で、**job ごとに上書きできる**。

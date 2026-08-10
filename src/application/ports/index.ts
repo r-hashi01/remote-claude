@@ -71,6 +71,16 @@ export interface SandboxLedgerStore {
  * A port rather than a list: the answer belongs to GitHub, and duplicating it
  * here would only ever be a stale subset of what the App installation permits.
  */
+export interface OpenPullRequest {
+  repo: string;
+  /** The branch carrying the work. */
+  head: string;
+  base: string;
+  title: string;
+  body: string;
+  draft: boolean;
+}
+
 export interface GitHubAccess {
   assertRepositoryReachable(repoUrl: string): Promise<void>;
   /**
@@ -81,6 +91,10 @@ export interface GitHubAccess {
    * spends twenty minutes producing a branch it cannot deliver.
    */
   assertRepositoryWritable(repoUrl: string): Promise<void>;
+  /** Refuse a pull request the credential could not open. */
+  assertCanOpenPullRequests(repoUrl: string): Promise<void>;
+  /** Returns the pull request's URL. */
+  openPullRequest(input: OpenPullRequest): Promise<string>;
 }
 
 /** The Durable Object alarm, as far as the application is concerned. */

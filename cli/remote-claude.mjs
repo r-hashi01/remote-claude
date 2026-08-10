@@ -37,6 +37,7 @@ Options for run:
   --no-follow       return immediately after printing the task id
   --skip-checks     skip lint/test/build
   --push            push the branch (requires ALLOW_PUSH=true on the worker)
+  --pr              push and open a pull request (implies --push)
   --keep            leave the sandbox alive for inspection
   --json            machine-readable output
 
@@ -183,6 +184,9 @@ async function cmdRun(config, args) {
       baseBranch: opts.base,
       skipChecks: opts['skip-checks'],
       push: opts.push,
+      // Left to the executor to compose the title and body: it knows the prompt
+      // and, by the time it opens one, what its own checks reported.
+      ...(opts.pr ? { pullRequest: {} } : {}),
       keepSandbox: opts.keep,
     },
   });
@@ -447,6 +451,8 @@ function printSummary(task, id) {
     return;
   }
   log(`branch   ${result.branch}${result.pushed ? ' (pushed)' : ''}`);
+  // The one line that lets somebody without this CLI see the work.
+  if (task.pullRequestUrl) log(`pr       ${task.pullRequestUrl}`);
   log(`changed  ${result.changed ? 'yes' : 'no'}${result.commitSha ? ` (${result.commitSha.slice(0, 8)})` : ''}`);
 
   const interesting = (result.steps || []).filter((s) => ['lint', 'test', 'build'].includes(s.name));
@@ -466,7 +472,7 @@ function printSummary(task, id) {
     log('--- claude ---');
     log(task.finalText.trim().slice(0, 4000));
   }
-  if (result.changed) {
+  if (result.changed && !task.pullRequestUrl) {
     log('');
     log(`apply locally:  remote-claude apply ${id}`);
   }
