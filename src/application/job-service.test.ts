@@ -192,6 +192,47 @@ describe('starting queued work', () => {
     expect(jobs.load(job.id)?.status).toBe('running');
   });
 
+  // The commands belonged to the deployment while the repository did too. Since
+  // a job may name its own repository (ADR 0010), running the deployment's
+  // install against it fails — and `skipChecks` does not cover install, so there
+  // was no way to run a job on any other repository at all.
+  test('a job can bring its own commands, and inherits the rest', async () => {
+    const { service, sandboxes } = harness({
+      policy: policy({
+        commands: { install: 'their-install', lint: 'their-lint', test: 'their-test', build: '' },
+      }),
+    });
+
+    const job = await service.createJob({
+      prompt: 'x',
+      commands: { install: 'npm ci --no-audit --no-fund', test: 'npm test' },
+    });
+    await service.tick();
+
+    const written = JSON.parse(
+      sandboxes.get(`rc-${job.id}`).files.get(`${STATE_DIR}/job.json`) as string
+    );
+    expect(written.commands).toEqual({
+      install: 'npm ci --no-audit --no-fund',
+      lint: 'their-lint',
+      test: 'npm test',
+      build: '',
+    });
+  });
+
+  test('a job that brings none runs the deployment’s commands unchanged', async () => {
+    const commands = { install: 'their-install', lint: '', test: '', build: '' };
+    const { service, sandboxes } = harness({ policy: policy({ commands }) });
+
+    const job = await service.createJob({ prompt: 'x' });
+    await service.tick();
+
+    const written = JSON.parse(
+      sandboxes.get(`rc-${job.id}`).files.get(`${STATE_DIR}/job.json`) as string
+    );
+    expect(written.commands).toEqual(commands);
+  });
+
   test('starts no more at once than the deployment allows', async () => {
     const { service, jobs } = harness({ policy: policy({ maxConcurrency: 1 }) });
     const first = await service.createJob({ prompt: 'one' });

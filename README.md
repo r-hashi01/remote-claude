@@ -420,6 +420,28 @@ curl -X POST https://remote-claude.<subdomain>.workers.dev/jobs \
 `jobId` は互換のために残している。**新しいコードは `id` を使う**（他のendpointと同じ名前）。
 `GET /jobs` も同じ配列を `jobs` と `tasks` の両方の名前で返す。
 
+### job ごとに commands を渡す
+
+`INSTALL_COMMAND` などは deployment 単位の既定値で、**job ごとに上書きできる**。
+`repo` を渡すときは実質必須:
+
+```jsonc
+{
+  "prompt": "...",
+  "repo": "https://github.com/acme/app.git",
+  "commands": {
+    "install": "npm ci --no-audit --no-fund",
+    "lint": "npm run typecheck",
+    "test": "npm test",
+    "build": ""            // 空文字は「この step を skip」という指示
+  }
+}
+```
+
+指定しなかったキーは deployment の値を継ぐ。**`skipChecks` は lint/test/build にしか効かず、
+install は必ず走る**ので、別 repo に対して deployment の install がそのまま走ると落ちる
+（roadmap RC-14 はこれで表に出た）。
+
 ---
 
 ## SDK
@@ -438,6 +460,8 @@ const rc = createClient({ url: process.env.REMOTE_CLAUDE_URL!, token: process.en
 const job = await rc.startJob({
   prompt: 'ログイン時の500エラーを調査して修正して',
   repo: 'https://github.com/acme/app.git',   // ALLOW_CUSTOM_REPO=true のとき
+  // repo を渡すなら commands も渡す（deployment の既定値はその repo のものではない）
+  commands: { install: 'npm ci', lint: 'npm run typecheck', test: 'npm test', build: '' },
 });
 
 const finished = await rc.waitForJob(job.id, {

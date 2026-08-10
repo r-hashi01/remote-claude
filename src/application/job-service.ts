@@ -164,6 +164,7 @@ export class JobService {
         keepSandbox: request.keepSandbox === true,
         push: request.push === true,
       },
+      commands: request.commands,
       now: clock.now(),
     });
 
@@ -308,7 +309,10 @@ export class JobService {
           branch: job.branch,
           baseBranch: job.baseBranch,
           options: job.options,
-          commands: policy.commands,
+          // The deployment's commands, with this job's overrides on top. The
+          // install step is not covered by skipChecks, so a job on another
+          // repository has to be able to replace it.
+          commands: job.resolveCommands(policy.commands),
           stepTimeoutMs: policy.jobTimeoutMs,
           claudeTimeoutMs: policy.claudeTimeoutMs,
         })

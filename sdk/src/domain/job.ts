@@ -74,6 +74,19 @@ export interface JobOptions {
   push: boolean;
 }
 
+/**
+ * The commands the executor runs around the agent.
+ *
+ * An empty string means "skip this step", which is a real instruction rather
+ * than a missing value.
+ */
+export interface JobCommands {
+  install: string;
+  lint: string;
+  test: string;
+  build: string;
+}
+
 export interface JobRecord {
   id: string;
   status: JobStatus;
@@ -98,6 +111,8 @@ export interface JobRecord {
   finalText?: string;
   result?: JobResult;
   options: JobOptions;
+  /** Commands this job runs instead of the deployment's. */
+  commands?: Partial<JobCommands>;
 }
 
 /**
@@ -123,6 +138,19 @@ export interface StartJob {
    * job that fails minutes later on clone.
    */
   repo?: string;
+  /**
+   * Run these instead of the deployment's install/lint/test/build.
+   *
+   * Effectively required whenever `repo` is used: a deployment's commands were
+   * written for the repository it is configured with, and the install step runs
+   * even when `skipChecks` is set — so a job on another repository has to
+   * replace it. Unspecified keys inherit the deployment's.
+   *
+   * ```ts
+   * commands: { install: 'npm ci --no-audit --no-fund', lint: 'npm run typecheck', test: 'npm test', build: '' }
+   * ```
+   */
+  commands?: Partial<JobCommands>;
   /** Work on this branch instead of a generated `claude/<jobId>`. */
   branch?: string;
   /** Skip lint/test/build even when the executor has them configured. */

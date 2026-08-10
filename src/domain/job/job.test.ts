@@ -55,6 +55,31 @@ describe('creating a job', () => {
   });
 });
 
+describe('the commands a job runs', () => {
+  test('by default it brings none of its own', () => {
+    expect(Job.create(BASE).commandOverrides).toEqual({});
+  });
+
+  test('keeps what it was given', () => {
+    const job = Job.create({ ...BASE, commands: { install: 'npm ci', test: 'npm test' } });
+    expect(job.commandOverrides).toEqual({ install: 'npm ci', test: 'npm test' });
+  });
+
+  // An empty string is a real value: the runner reads it as "skip this step".
+  // Dropping it would silently fall back to the deployment's command.
+  test('an empty command is kept, because empty means skip', () => {
+    expect(Job.create({ ...BASE, commands: { install: '' } }).commandOverrides).toEqual({
+      install: '',
+    });
+  });
+
+  // JSON cannot carry undefined, but a caller assembling the object in code can.
+  test('a key with no value is not an override', () => {
+    const job = Job.create({ ...BASE, commands: { install: 'npm ci', lint: undefined } });
+    expect(job.commandOverrides).toEqual({ install: 'npm ci' });
+  });
+});
+
 describe('the execution lifecycle', () => {
   test('queued → starting → running', () => {
     const job = Job.create(BASE);

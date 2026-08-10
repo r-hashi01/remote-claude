@@ -57,6 +57,19 @@ export interface JobOptions {
   push: boolean;
 }
 
+/**
+ * The commands run around the agent, in the order they run.
+ *
+ * An empty string means "skip this step" — which is a real instruction, not a
+ * missing value, and is why overrides keep empty strings.
+ */
+export interface JobCommands {
+  install: string;
+  lint: string;
+  test: string;
+  build: string;
+}
+
 export interface JobRecord {
   id: string;
   status: JobStatus;
@@ -89,6 +102,14 @@ export interface JobRecord {
   finalText?: string;
   result?: JobResult;
   options: JobOptions;
+  /**
+   * Commands this job runs instead of the deployment's.
+   *
+   * Present because a job may name its own repository, and a repository's build
+   * commands belong to it rather than to whichever repository the executor was
+   * configured for. Only the keys given are overridden.
+   */
+  commands?: Partial<JobCommands>;
 }
 
 /**
@@ -108,6 +129,13 @@ export interface JobRequest {
   prompt: string;
   baseBranch?: string;
   repo?: string;
+  /**
+   * Run these instead of the deployment's install/lint/test/build.
+   *
+   * Required in practice whenever `repo` is used: the deployment's commands were
+   * written for the repository it is configured with. Unspecified keys inherit.
+   */
+  commands?: Partial<JobCommands>;
   /** Work on this branch instead of a generated one. */
   branch?: string;
   /** Skip lint/test/build even when configured. */
