@@ -1,0 +1,128 @@
+import type { Job } from '../../domain/job/job';
+import type { JobStatus, LogLine, LogStream } from '../../domain/job/record';
+import type { SandboxLedgerEntry } from '../../domain/sandbox/ledger';
+
+/**
+ * What the application layer needs from the outside world.
+ *
+ * Every one of these is implemented twice: once in `src/infrastructure` against
+ * Durable Object storage, R2, GitHub and the container platform, and once in
+ * `src/application/testing.ts` as something that lives in a Map. The use cases
+ * cannot tell the difference, which is the entire reason a job's lifecycle can
+ * now be tested without workerd, a container, or a network.
+ *
+ * The stores are synchronous because Durable Object SQLite is synchronous.
+ * Pretending otherwise would add awaits that promise a concurrency this object
+ * does not have.
+ */
+
+export * from './sandbox';
+
+export interface Clock {
+  now(): number;
+}
+
+/** Generates job ids. A port because ids must be stable under test. */
+export interface JobIdFactory {
+  next(): string;
+}
+
+export interface JobStore {
+  load(id: string): Job | null;
+  save(job: Job): void;
+  /** Newest first. */
+  listRecent(limit: number): Job[];
+  /** Oldest first — the queue is served in the order it was joined. */
+  listQueued(): Job[];
+  listByStatus(statuses: JobStatus[]): Job[];
+  countQueued(): number;
+  idsCreatedBefore(cutoff: number): string[];
+  remove(id: string): void;
+}
+
+export interface LogStore {
+  /** Buffered; `flush` is what makes a line visible to readers. */
+  append(jobId: string, stream: LogStream, line: string): void;
+  flush(jobId: string): void;
+  read(jobId: string, since: number, limit: number): LogLine[];
+  removeFor(jobId: string): void;
+}
+
+/** Patch and result bodies, which have no size bound. */
+export interface ArtifactStore {
+  putPatch(jobId: string, patch: string): Promise<void>;
+  putResult(jobId: string, body: string): Promise<void>;
+  getPatch(jobId: string): Promise<string | null>;
+}
+
+export interface SandboxLedgerStore {
+  record(sandboxId: string, jobId: string, now: number): void;
+  countTeardownAttempt(sandboxId: string): void;
+  markDestroyed(sandboxId: string, now: number): void;
+  markTeardownError(sandboxId: string, error: string): void;
+  /** Job ids whose sandbox has not been confirmed destroyed. */
+  outstandingJobIds(): string[];
+  list(limit: number): SandboxLedgerEntry[];
+}
+
+/**
+ * Whether the deployment's credential can actually reach a repository.
+ *
+ * A port rather than a list: the answer belongs to GitHub, and duplicating it
+ * here would only ever be a stale subset of what the App installation permits.
+ */
+export interface GitHubAccess {
+  assertRepositoryReachable(repoUrl: string): Promise<void>;
+}
+
+/** The Durable Object alarm, as far as the application is concerned. */
+export interface Scheduler {
+  scheduleIn(delayMs: number): Promise<void>;
+}
+
+/**
+ * Jobs this executor is currently driving, and their cancellation.
+ *
+ * In production this is a Map of AbortControllers held by one Durable Object,
+ * which is what makes the concurrency count trivially correct: exactly one
+ * instance exists.
+ */
+export interface RunningJobs {
+  readonly size: number;
+  ids(): string[];
+  has(jobId: string): boolean;
+  begin(jobId: string): void;
+  end(jobId: string): void;
+  /** Signal a running job to stop. False if it was not running. */
+  requestCancel(jobId: string): boolean;
+  isCancelled(jobId: string): boolean;
+}
+
+/** Secret masking, as a function so the application never holds the secrets. */
+export type Redact = (input: string) => string;
+
+/**
+ * The deployment's settings, as the application needs them.
+ *
+ * Declared here rather than imported from the infrastructure's config loader:
+ * the use cases define what they require, and the environment supplies it.
+ */
+export interface ExecutorPolicy {
+  repoUrl: string;
+  defaultBaseBranch: string;
+  allowCustomRepo: boolean;
+  maxConcurrency: number;
+  jobTimeoutMs: number;
+  claudeTimeoutMs: number;
+  heartbeatTimeoutMs: number;
+  stallTimeoutMs: number;
+  /** How long a job's record and logs are kept. */
+  retentionMs: number;
+  sleepAfter: string;
+  commands: {
+    install: string;
+    lint: string;
+    test: string;
+    build: string;
+  };
+}

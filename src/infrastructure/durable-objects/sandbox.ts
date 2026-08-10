@@ -1,8 +1,8 @@
 import { Sandbox as BaseSandbox } from '@cloudflare/sandbox';
 import type { DurableObject } from 'cloudflare:workers';
-import { parseAllowedHosts } from './config';
-import { getInstallationToken } from './github-app';
-import type { Env } from './types';
+import { parseAllowedHosts } from '../config';
+import { getInstallationToken } from '../github/app';
+import type { Env } from '../env';
 
 /**
  * Sandbox container for remote-claude.

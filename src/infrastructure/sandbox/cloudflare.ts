@@ -8,8 +8,8 @@ import type {
   SandboxSession,
   SnapshotOptions,
   SnapshotRef,
-} from './types';
-import type { Env } from '../types';
+} from '../../application/ports/sandbox';
+import type { Env } from '../env';
 
 const PROVIDER_NAME = 'cloudflare';
 
