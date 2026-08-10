@@ -1,5 +1,9 @@
-import type { GitHubAccess } from '../../application/ports';
-import { canPush, type InstallationPermissions } from '../../domain/job/permissions';
+import type { GitHubAccess, OpenPullRequest } from '../../application/ports';
+import {
+  canOpenPullRequests,
+  canPush,
+  type InstallationPermissions,
+} from '../../domain/job/permissions';
 import { repositorySlug } from '../../domain/job/repository';
 import type { Env } from '../env';
 
@@ -129,6 +133,63 @@ export async function assertRepositoryWritable(env: Env, repoUrl: string): Promi
   }
 }
 
+/**
+ * Refuse a pull request the credential could not open.
+ *
+ * A separate permission from writing contents: an App can be allowed to push a
+ * branch and not to open a pull request for it.
+ */
+export async function assertCanOpenPullRequests(env: Env, repoUrl: string): Promise<void> {
+  const slug = repositorySlug(repoUrl);
+  if (canOpenPullRequests(await installationPermissions(env))) return;
+
+  throw new Error(
+    `this executor's GitHub App installation cannot open pull requests on ${slug}. Its Pull ` +
+      'requests permission must be Read and write, and the change has to be accepted on the ' +
+      'installation before it takes effect.'
+  );
+}
+
+/**
+ * Open the pull request, and return its URL.
+ *
+ * Runs on this side rather than in the container: it is a control-plane action,
+ * and the credential for it lives here (ADR 0002).
+ */
+export async function openPullRequest(env: Env, input: OpenPullRequest): Promise<string> {
+  const slug = repositorySlug(input.repo);
+  const token = await getInstallationToken(env);
+
+  const response = await fetch(`https://api.github.com/repos/${slug}/pulls`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'remote-claude',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      title: input.title,
+      body: input.body,
+      head: input.head,
+      base: input.base,
+      draft: input.draft,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    // 422 is the common one and is usually informative: no commits between the
+    // branches, or a pull request already open for them.
+    throw new Error(`GitHub refused the pull request (${response.status}): ${body.slice(0, 300)}`);
+  }
+
+  const created = (await response.json()) as { html_url?: string };
+  if (!created.html_url) throw new Error('GitHub accepted the pull request but returned no URL');
+  return created.html_url;
+}
+
 /** What the current installation token is allowed to do. */
 export async function installationPermissions(env: Env): Promise<InstallationPermissions> {
   // Minting populates the cache; the permissions come back with the token.
@@ -146,6 +207,14 @@ export class GitHubAppAccess implements GitHubAccess {
 
   assertRepositoryWritable(repoUrl: string): Promise<void> {
     return assertRepositoryWritable(this.env, repoUrl);
+  }
+
+  assertCanOpenPullRequests(repoUrl: string): Promise<void> {
+    return assertCanOpenPullRequests(this.env, repoUrl);
+  }
+
+  openPullRequest(input: OpenPullRequest): Promise<string> {
+    return openPullRequest(this.env, input);
   }
 }
 

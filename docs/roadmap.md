@@ -78,7 +78,7 @@ in-memory であり、2秒ごとの alarm の合間にオブジェクトが退�
 ポーリング単位でバッチが完結するため、ポーリングを跨いで保持する意味はない。
 `mirrorLogs` の中でフラッシュするようにして解消。バッチ化の利点（1ポーリング1挿入）は保たれる。
 
-### RC-6. push と PR 作成 → push は実装済み / PR 作成は未着手
+### ~~RC-6. push と PR 作成~~ → 対応済み
 
 **観測**: 1日で4本のジョブの成果を**すべて手で** `git apply` → commit → PR した。ループが閉じていない。
 
@@ -93,12 +93,16 @@ in-memory であり、2秒ごとの alarm の合間にオブジェクトが退�
   20分かけてから `git push` で落ちるのではなく受付時に拒否する
 - 到達性チェックと同じ1本の GitHub 呼び出しに畳んだ（`fetchRepository`）
 
-**残り**: PR 作成。これは runner ではなく **Worker 側**でやるべき（control plane の仕事で、
-`api.github.com` への認証も Worker が持っている）。リクエストの形
-（`pr: true` か `pullRequest: {title, body}` か）を決めるのが先。
+**push の live 検証**: 通った（`git-push` 2.5s、ブランチが GitHub 上に出現）。
+その1本前は**チェックのバグで誤って拒否**していた —
+`GET /repos/{owner}/{repo}` の `permissions.push` は installation token には返らないフィールドで、
+恒久的に「書けない」と答えていた。権限は token 発行時のレスポンスから取るように直した。
 
-**未検証**: live で push が通ること。GitHub App の Contents を Read and write に上げ、
-インストール先で承認する操作が必要。
+**PR 作成**: `pullRequest?: {title?, body?, draft?}` として実装。**push を含む**。
+Worker 側でやる（control plane の仕事で、`api.github.com` の認証も Worker が持っている）。
+省略時は executor が組む — タイトルはプロンプトの1行目、本文は diffstat と実際に走った
+チェックの結果で、**agent の締めの発言は入れない**（レビュー対象が書いた要約なので）。
+**PR を開けなくてもジョブは失敗させない**（ブランチは push 済みで、成果は失われていない）。
 
 ---
 

@@ -21,6 +21,7 @@ import type {
   JobIdFactory,
   JobStore,
   LogStore,
+  OpenPullRequest,
   RunningJobs,
   SandboxLedgerStore,
   SandboxProvider,
@@ -238,11 +239,24 @@ export class InMemoryRunningJobs implements RunningJobs {
 export class AllowAllGitHub implements GitHubAccess {
   readonly checked: string[] = [];
   readonly checkedForWriting: string[] = [];
+  readonly checkedForPullRequests: string[] = [];
+  readonly opened: OpenPullRequest[] = [];
+  /** Set to make opening fail, as a protected branch or a race would. */
+  openError: string | null = null;
+
   async assertRepositoryReachable(repoUrl: string): Promise<void> {
     this.checked.push(repoUrl);
   }
   async assertRepositoryWritable(repoUrl: string): Promise<void> {
     this.checkedForWriting.push(repoUrl);
+  }
+  async assertCanOpenPullRequests(repoUrl: string): Promise<void> {
+    this.checkedForPullRequests.push(repoUrl);
+  }
+  async openPullRequest(input: OpenPullRequest): Promise<string> {
+    if (this.openError) throw new Error(this.openError);
+    this.opened.push(input);
+    return `https://github.com/o/r/pull/${this.opened.length}`;
   }
 }
 
@@ -252,6 +266,12 @@ export class ReadOnlyGitHub implements GitHubAccess {
   async assertRepositoryWritable(): Promise<void> {
     throw new Error('the GitHub App installation cannot write to o/r; grant Contents: Read and write');
   }
+  async assertCanOpenPullRequests(): Promise<void> {
+    throw new Error('the GitHub App installation cannot open pull requests on o/r');
+  }
+  async openPullRequest(): Promise<string> {
+    throw new Error('the GitHub App installation cannot open pull requests on o/r');
+  }
 }
 
 export class DenyAllGitHub implements GitHubAccess {
@@ -260,6 +280,12 @@ export class DenyAllGitHub implements GitHubAccess {
     throw new Error(this.message);
   }
   async assertRepositoryWritable(): Promise<void> {
+    throw new Error(this.message);
+  }
+  async assertCanOpenPullRequests(): Promise<void> {
+    throw new Error(this.message);
+  }
+  async openPullRequest(): Promise<string> {
     throw new Error(this.message);
   }
 }

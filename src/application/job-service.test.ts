@@ -512,6 +512,123 @@ describe('following a running job', () => {
   });
 });
 
+describe('opening a pull request', () => {
+  /** A finished job whose runner pushed the branch. */
+  async function pushedAndFinished(overrides: Parameters<typeof harness>[0] = {}) {
+    const h = harness({ policy: policy({ allowPush: true }), ...overrides });
+    const job = await h.service.createJob({
+      prompt: 'fix the build\n\nand explain why',
+      pullRequest: { title: 'P0-4: fix the build' },
+    });
+    await h.service.tick();
+
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() }));
+    sandbox.files.set(
+      `${STATE_DIR}/result.json`,
+      JSON.stringify({
+        claudeOutput: '',
+        changed: true,
+        branch: job.branch,
+        pushed: true,
+        gitStatus: '',
+        diffStat: ' AGENTS.md | 13 +++++',
+        diffBytes: 40,
+        steps: [{ name: 'test', command: 'npm test', exitCode: 0, success: true, durationMs: 1, output: '' }],
+      })
+    );
+    await h.service.tick();
+    return { ...h, jobId: job.id };
+  }
+
+  test('asking for one implies a push', async () => {
+    const github = new AllowAllGitHub();
+    const { service } = harness({ policy: policy({ allowPush: true }), github });
+
+    const job = await service.createJob({ prompt: 'x', pullRequest: {} });
+
+    expect(job.options.push).toBe(true);
+    expect(github.checkedForWriting).toEqual([CONFIGURED_REPO]);
+    expect(github.checkedForPullRequests).toEqual([CONFIGURED_REPO]);
+  });
+
+  test('is refused when the deployment forbids pushing', async () => {
+    const { service } = harness({ policy: policy({ allowPush: false }) });
+
+    await expect(service.createJob({ prompt: 'x', pullRequest: {} })).rejects.toThrow(
+      /pushing is disabled/
+    );
+  });
+
+  test('is refused when the credential cannot open one', async () => {
+    const { service } = harness({ policy: policy({ allowPush: true }), github: new ReadOnlyGitHub() });
+
+    await expect(service.createJob({ prompt: 'x', pullRequest: {} })).rejects.toThrow(/cannot/);
+  });
+
+  test('opens it once the work is pushed, and records where it is', async () => {
+    const github = new AllowAllGitHub();
+    const h = await pushedAndFinished({ github });
+
+    expect(github.opened).toHaveLength(1);
+    expect(github.opened[0]).toMatchObject({
+      repo: CONFIGURED_REPO,
+      base: 'main',
+      title: 'P0-4: fix the build',
+      draft: false,
+    });
+    // The body is composed from what the executor observed, not from the agent.
+    expect(github.opened[0]?.body).toContain('AGENTS.md | 13');
+
+    const job = h.jobs.load(h.jobId)?.toRecord();
+    expect(job?.pullRequestUrl).toBe('https://github.com/o/r/pull/1');
+    expect(h.logs.all(h.jobId).join('\n')).toMatch(/pull request opened/);
+  });
+
+  test('a job that pushed nothing gets no pull request', async () => {
+    const github = new AllowAllGitHub();
+    const h = harness({ policy: policy({ allowPush: true }), github });
+    const job = await h.service.createJob({ prompt: 'x', pullRequest: {} });
+    await h.service.tick();
+
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() }));
+    sandbox.files.set(
+      `${STATE_DIR}/result.json`,
+      JSON.stringify({ claudeOutput: '', changed: false, branch: job.branch, pushed: false, gitStatus: '', diffStat: '', diffBytes: 0, steps: [] })
+    );
+    await h.service.tick();
+
+    expect(github.opened).toEqual([]);
+    expect(h.logs.all(job.id).join('\n')).toMatch(/nothing was pushed/);
+  });
+
+  // The work exists on a branch either way; failing the job over the paperwork
+  // would throw away a result that is already there.
+  test('a pull request that cannot be opened does not fail the job', async () => {
+    const github = new AllowAllGitHub();
+    github.openError = 'GitHub refused the pull request (422): No commits between main and claude/x';
+    const h = await pushedAndFinished({ github });
+
+    expect(h.jobs.load(h.jobId)?.status).toBe('completed');
+    const logs = h.logs.all(h.jobId).join('\n');
+    expect(logs).toMatch(/could not be opened/);
+    expect(logs).toMatch(/is pushed; open it by hand/);
+  });
+
+  test('a job that did not ask for one gets none', async () => {
+    const github = new AllowAllGitHub();
+    const h = harness({ policy: policy({ allowPush: true }), github });
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() }));
+    await h.service.tick();
+
+    expect(github.opened).toEqual([]);
+  });
+});
+
 describe('cancelling', () => {
   test('a queued job is cancelled without ever starting', async () => {
     const { service, jobs } = harness();

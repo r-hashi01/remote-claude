@@ -1,5 +1,6 @@
 import { branchForJob, sanitizeRef } from './branch';
 import { normalisePrompt } from './prompt';
+import type { PullRequestRequest } from './pull-request';
 import type {
   JobCommands,
   JobOptions,
@@ -21,6 +22,8 @@ export interface CreateJobInput {
   options?: Partial<JobOptions>;
   /** Commands to run instead of the deployment's. Unspecified keys inherit. */
   commands?: Partial<JobCommands>;
+  /** Open a pull request when the work lands. */
+  pullRequest?: PullRequestRequest;
   now: number;
 }
 
@@ -64,6 +67,7 @@ export class Job {
         push: input.options?.push === true,
       },
       commands: definedOnly(input.commands),
+      ...(input.pullRequest ? { pullRequest: input.pullRequest } : {}),
     });
   }
 
@@ -195,6 +199,15 @@ export class Job {
 
   markSandboxDestroyed(): void {
     this.record.sandboxDestroyed = true;
+  }
+
+  /** Whether this job asked for a pull request, and with what. */
+  get pullRequestRequest(): PullRequestRequest | undefined {
+    return this.record.pullRequest;
+  }
+
+  recordPullRequest(url: string): void {
+    this.record.pullRequestUrl = url;
   }
 
   /**

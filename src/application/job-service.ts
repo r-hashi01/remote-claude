@@ -7,6 +7,7 @@ import {
 import { assessRunnerHealth, exceededDeadline } from '../domain/job/health';
 import { Job } from '../domain/job/job';
 import type { JobRecord, JobRequest, JobResult, JobSummary, LogLine } from '../domain/job/record';
+import { composePullRequest } from '../domain/job/pull-request';
 import { resolveRepository } from '../domain/job/repository';
 import { shouldRetryLaunch, shouldRetrySilentStartup } from '../domain/job/retry';
 import {
@@ -146,7 +147,12 @@ export class JobService {
     // that was configured to forbid it and the runner would try — and a caller
     // who asked for a push and got a branch that was never pushed has been
     // misinformed either way.
-    if (request.push === true) {
+    // A pull request needs a branch on the remote, so asking for one asks for a
+    // push. Refusing the combination would be pedantic; the checks below are the
+    // same either way.
+    const wantsPush = request.push === true || request.pullRequest !== undefined;
+
+    if (wantsPush) {
       if (!policy.allowPush) {
         throw new Error(
           'this executor will not push: pushing is disabled on it. Set ALLOW_PUSH=true in its ' +
@@ -157,6 +163,7 @@ export class JobService {
       // The switch says this deployment is willing; GitHub says whether it can.
       await github.assertRepositoryWritable(repo);
     }
+    if (request.pullRequest) await github.assertCanOpenPullRequests(repo);
 
     const job = Job.create({
       id: ids.next(),
@@ -167,9 +174,10 @@ export class JobService {
       options: {
         skipChecks: request.skipChecks === true,
         keepSandbox: request.keepSandbox === true,
-        push: request.push === true,
+        push: wantsPush,
       },
       commands: request.commands,
+      pullRequest: request.pullRequest,
       now: clock.now(),
     });
 
@@ -611,6 +619,52 @@ export class JobService {
     }
 
     await this.settle(jobId, phase === 'completed' ? 'completed' : 'failed', error, result);
+    if (phase === 'completed') await this.tryOpenPullRequest(jobId);
+  }
+
+  /**
+   * Open the pull request this job asked for.
+   *
+   * After settling, deliberately: the job is finished either way. A pull request
+   * that cannot be opened is reported and nothing more — the branch is pushed, so
+   * the work is not lost, and failing a completed job over the paperwork would
+   * throw away a result that exists.
+   */
+  private async tryOpenPullRequest(jobId: string): Promise<void> {
+    const { jobs, logs, github } = this.deps;
+    const job = jobs.load(jobId);
+    if (!job?.pullRequestRequest) return;
+
+    const record = job.toRecord();
+    if (!record.result?.pushed) {
+      this.log(jobId, 'system', 'no pull request: nothing was pushed');
+      logs.flush(jobId);
+      return;
+    }
+
+    const content = composePullRequest(record, record.result);
+    try {
+      const url = await github.openPullRequest({
+        repo: record.repo,
+        head: record.branch,
+        base: record.baseBranch,
+        ...content,
+      });
+      const current = jobs.load(jobId);
+      if (current) {
+        current.recordPullRequest(url);
+        jobs.save(current);
+      }
+      this.log(jobId, 'system', `pull request opened: ${url}`);
+    } catch (error) {
+      this.log(
+        jobId,
+        'system',
+        `pull request could not be opened: ${errorMessage(error)}. ` +
+          `The branch ${record.branch} is pushed; open it by hand.`
+      );
+    }
+    logs.flush(jobId);
   }
 
   private async settle(
