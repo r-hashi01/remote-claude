@@ -10,11 +10,21 @@ export const MAX_LAUNCH_ATTEMPTS = 3;
 /**
  * Errors that mean "the platform was busy", not "this job is broken".
  *
- * Observed twice in normal use: the sandbox runtime is updated underneath a
- * running operation and it is interrupted mid-flight.
+ * Both observed wordings share one phrase, and matching that is narrower than
+ * matching either cause:
+ *
+ *   Sandbox operation sandbox.exec was interrupted while the platform was
+ *     updating the sandbox runtime
+ *   Sandbox operation commands.execute was interrupted while the runtime
+ *     connection was closing
+ *
+ * The second one cost a real job. It failed during the clone — before the runner
+ * existed, so nothing had run — and was not retried only because the pattern
+ * knew the first phrasing and not the second. A rule that recognises one wording
+ * of a platform hiccup and not another is a rule that will keep being surprised.
  */
 export function isTransientPlatformError(message: string): boolean {
-  return /updating the sandbox runtime|container unavailable|temporarily unavailable|503/i.test(
+  return /was interrupted while|updating the sandbox runtime|container unavailable|temporarily unavailable|503/i.test(
     message
   );
 }
