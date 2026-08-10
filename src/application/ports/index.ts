@@ -73,6 +73,14 @@ export interface SandboxLedgerStore {
  */
 export interface GitHubAccess {
   assertRepositoryReachable(repoUrl: string): Promise<void>;
+  /**
+   * Whether the credential may write to it.
+   *
+   * Asked for the same reason reachability is (ADR 0010): the answer belongs to
+   * GitHub, and a job that will not be able to push should be refused before it
+   * spends twenty minutes producing a branch it cannot deliver.
+   */
+  assertRepositoryWritable(repoUrl: string): Promise<void>;
 }
 
 /** The Durable Object alarm, as far as the application is concerned. */

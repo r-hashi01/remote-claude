@@ -146,12 +146,16 @@ export class JobService {
     // that was configured to forbid it and the runner would try — and a caller
     // who asked for a push and got a branch that was never pushed has been
     // misinformed either way.
-    if (request.push === true && !policy.allowPush) {
-      throw new Error(
-        'this executor will not push: pushing is disabled on it. Set ALLOW_PUSH=true in its ' +
-          'wrangler.jsonc vars and give its GitHub App Contents: Read and write, or fetch the ' +
-          'diff and apply it yourself.'
-      );
+    if (request.push === true) {
+      if (!policy.allowPush) {
+        throw new Error(
+          'this executor will not push: pushing is disabled on it. Set ALLOW_PUSH=true in its ' +
+            'wrangler.jsonc vars and give its GitHub App Contents: Read and write, or fetch the ' +
+            'diff and apply it yourself.'
+        );
+      }
+      // The switch says this deployment is willing; GitHub says whether it can.
+      await github.assertRepositoryWritable(repo);
     }
 
     const job = Job.create({
