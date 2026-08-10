@@ -68,10 +68,18 @@ export async function route(request: Request, env: Env): Promise<Response> {
   // `session/update` notifications over SSE; the local bridge turns that into
   // real ACP stdio for an editor.
   if (path === '/acp/sessions' && method === 'POST') {
-    return Response.json(
-      { sessionId: `s-${crypto.randomUUID()}`, protocolVersion: ACP_PROTOCOL_VERSION },
-      { status: 201 }
-    );
+    // Body is optional: a caller with nothing to override sends none.
+    const body = request.headers.get('content-type')?.includes('application/json')
+      ? await readJson<{ repo?: string; baseBranch?: string }>(request)
+      : {};
+
+    const sessionId = `s-${crypto.randomUUID()}`;
+    const session = env.ACP.get(env.ACP.idFromName(sessionId));
+    // Unreachable or disallowed repositories fail here, the same way they fail
+    // `POST /jobs` — before the caller is told a session exists at all.
+    const { repo, baseBranch } = await session.start(body);
+
+    return Response.json({ sessionId, protocolVersion: ACP_PROTOCOL_VERSION, repo, baseBranch }, { status: 201 });
   }
 
   const acp = /^\/acp\/sessions\/([A-Za-z0-9-]+)(\/stream|\/prompt|\/cancel)?$/.exec(path);

@@ -858,12 +858,25 @@ ACPの **remote transport (Streamable HTTP / WebSocket) はまだRFD提案段階
 - リモート区間は独自のSSE（ACPのRFD案に寄せた形）
 - remote transportが安定したら `cli/acp-bridge.mjs` だけ差し替えればよい
 
+### セッションの repository
+
+`POST /acp/sessions` は任意で `{ "repo": "...", "baseBranch": "..." }` を受け、
+**ジョブと同じ規則**で解決する（`ALLOW_CUSTOM_REPO` と GitHub App installation の到達範囲 —
+ADR 0010）。省略すれば `REPO_URL`。レスポンスに解決結果が入る:
+
+```json
+{ "sessionId": "s-...", "protocolVersion": 1, "repo": "https://github.com/...", "baseBranch": "main" }
+```
+
+許可されない repo や到達できない repo は**セッションが存在すると伝える前に** 400 になる。
+clone は最初のターンで1回だけ行い、以降のターンは同じ作業ツリーを使う。
+
 ### 実装済みの範囲
 
 | ACP要素 | 状態 |
 |---|---|
 | `initialize` (protocolVersion 1) | ✅ |
-| `session/new` | ✅ |
+| `session/new` | ✅ 任意で repo / baseBranch を受ける |
 | `session/prompt`（多ターン） | ✅ `--resume` でClaude Code側の文脈を継続 |
 | `session/cancel` | ✅ |
 | `session/update` → `agent_message_chunk` | ✅ |

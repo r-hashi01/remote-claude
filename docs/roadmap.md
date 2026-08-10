@@ -154,11 +154,26 @@ provider への呼び出しを数えたときに出てきた。
 
 </details>
 
-### RC-11. ACP セッションを層の内側に入れる
+### ~~RC-11. ACP セッションを層の内側に入れる~~ → 対応済み
 
-**観測**: `AgentSession` は再編成の外に残っている。`loadConfig` と `getSandboxProvider` を
-直接呼び、テストが1つも無く、**repo は常に `REPO_URL`**（`ALLOW_CUSTOM_REPO` を尊重しない）。
-RC-7（ジョブ経路との接続）と同じ場所を触るので、順序はRC-7の前。
+**観測**: `AgentSession` は再編成の外に残っていた。`loadConfig` と `getSandboxProvider` を
+直接呼び、テストが1つも無く、**repo は常に `REPO_URL`**（`ALLOW_CUSTOM_REPO` を尊重しなかった）。
+
+**やったこと**（2本のジョブに分けて委譲、設計はローカルで決めた）:
+
+1. 純粋な部分を domain へ — `claudeProcessEnvironment`（3箇所の複製を畳み、
+   `/health/auth` が `ANTHROPIC_BASE_URL` を unset していなかった穴を閉じた）と
+   `buildClaudeCommand`
+2. `AgentSessionService` を application に切り出し、`SessionStore` / `UpdateSink` /
+   `Background` の3ポートを追加。DO は SSE・SQLite・`waitUntil` を持つ adapter になった。
+   repo はジョブと同じ規則（`resolveRepository` + 到達性確認）で解決し、
+   `POST /acp/sessions` が任意で受ける
+
+**テスト12件**。clone が1回だけであること、init イベントの session id が次ターンの
+`--resume` に載ること、実行中の2回目の prompt が拒否されること、cancel の stop reason など。
+ゼロだった箇所。
+
+**残り**: RC-7（ジョブ経路との接続）。これはセッションの構造ではなく製品としての判断。
 
 ### RC-12. CLI と dashboard を SDK に載せ替える
 
