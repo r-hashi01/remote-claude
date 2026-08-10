@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { JobRecord, JobStatus, LogLine } from '../domain/job.js';
+import { ExecutorError } from '../infrastructure/errors.js';
 import { FakeJobGateway, line } from './testing.js';
 import { waitForJob } from './wait-for-job.js';
 
@@ -124,5 +125,77 @@ describe('waitForJob', () => {
       waitForJob(gateway, 'job-1', { sleep: instant, signal: AbortSignal.abort() })
     ).rejects.toThrow();
     expect(gateway.calls).toEqual([]);
+  });
+});
+
+describe('waitForJob and a wobbling executor', () => {
+  // Observed for real: merging a PR deployed the Worker while a job was running,
+  // and the next poll answered 500 "Durable Object reset because its code was
+  // updated". The job was fine — it runs in a container and is re-adopted — but
+  // the client watching it died.
+  test('keeps polling through a transient failure', async () => {
+    const gateway = new FakeJobGateway();
+    gateway.states = [state('running'), state('completed')];
+    gateway.onGet = (attempt) => {
+      if (attempt === 1) throw new ExecutorError('Durable Object reset', 500);
+    };
+
+    const seen: Array<{ status: number | undefined }> = [];
+    const job = await waitForJob(gateway, 'job-1', {
+      sleep: instant,
+      onTransientError: (error) => seen.push({ status: error.status }),
+    });
+
+    expect(job.status).toBe('completed');
+    expect(seen).toEqual([{ status: 500 }]);
+  });
+
+  test('gives up after enough consecutive failures, and throws the last one', async () => {
+    const gateway = new FakeJobGateway();
+    gateway.states = [state('running')];
+    gateway.onGet = () => {
+      throw new ExecutorError('still broken', 503);
+    };
+
+    await expect(
+      waitForJob(gateway, 'job-1', { sleep: instant, maxConsecutiveErrors: 3 })
+    ).rejects.toThrow(/still broken/);
+  });
+
+  test('a rate limit is worth waiting out', async () => {
+    const gateway = new FakeJobGateway();
+    gateway.states = [state('completed')];
+    gateway.onGet = (attempt) => {
+      if (attempt === 0) throw new ExecutorError('slow down', 429);
+    };
+
+    expect((await waitForJob(gateway, 'job-1', { sleep: instant })).status).toBe('completed');
+  });
+
+  // A bad token or an unknown job will not get better by asking again.
+  test.each([401, 403, 404, 400])('does not retry %d', async (status) => {
+    const gateway = new FakeJobGateway();
+    gateway.states = [state('running')];
+    gateway.onGet = () => {
+      throw new ExecutorError('no', status);
+    };
+
+    await expect(waitForJob(gateway, 'job-1', { sleep: instant })).rejects.toMatchObject({ status });
+  });
+
+  // Logs are reporting on the job, and a problem with reporting must never
+  // decide whether the caller sees the job finish.
+  test('a failing log read does not stop the wait', async () => {
+    const gateway = new FakeJobGateway();
+    gateway.states = [state('completed')];
+    // Assigned on the instance so it shadows the method; spreading the object
+    // would drop everything that lives on the prototype.
+    gateway.logs = async () => {
+      throw new ExecutorError('logs are down', 500);
+    };
+
+    const job = await waitForJob(gateway, 'job-1', { sleep: instant, onLog: () => {} });
+
+    expect(job.status).toBe('completed');
   });
 });

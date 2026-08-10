@@ -10,8 +10,21 @@ export interface WaitOptions {
   onStatus?: (status: JobStatus, job: JobRecord) => void;
   /** Stop waiting. The job keeps running — use `cancelJob` to stop that too. */
   signal?: AbortSignal;
+  /**
+   * How many polls in a row may fail transiently before giving up. Defaults to
+   * five, which at the default interval is ten seconds of an unreachable
+   * executor.
+   */
+  maxConsecutiveErrors?: number;
+  /** Called when a poll failed in a way worth retrying. */
+  onTransientError?: (error: TransientError, consecutive: number) => void;
   /** Injectable for tests; the default is a real timer. */
   sleep?: Sleep;
+}
+
+/** An error carrying an HTTP status, when it had one. */
+export interface TransientError extends Error {
+  status?: number;
 }
 
 /**
@@ -31,14 +44,33 @@ export async function waitForJob(
   jobId: string,
   options: WaitOptions = {}
 ): Promise<JobRecord> {
-  const { intervalMs = 2_000, onLog, onStatus, signal, sleep = realSleep } = options;
+  const {
+    intervalMs = 2_000,
+    onLog,
+    onStatus,
+    signal,
+    sleep = realSleep,
+    maxConsecutiveErrors = 5,
+    onTransientError,
+  } = options;
 
   let since = 0;
   let reported: JobStatus | undefined;
+  let consecutiveErrors = 0;
 
   const drainLogs = async (): Promise<void> => {
     if (!onLog) return;
-    const page = await gateway.logs(jobId, since);
+    // Logs are reporting on the job. A failure here must never decide whether
+    // the caller gets to see the job finish — the executor applies the same rule
+    // to its own log mirroring.
+    let page;
+    try {
+      page = await gateway.logs(jobId, since);
+    } catch (error) {
+      if (!isTransient(error, signal)) throw error;
+      onTransientError?.(error as TransientError, consecutiveErrors);
+      return;
+    }
     if (page.logs.length === 0) return;
     since = page.nextSince;
     onLog(page.logs);
@@ -47,7 +79,22 @@ export async function waitForJob(
   for (;;) {
     throwIfAborted(signal);
 
-    const job = await gateway.get(jobId);
+    let job: JobRecord;
+    try {
+      job = await gateway.get(jobId);
+      consecutiveErrors = 0;
+    } catch (error) {
+      // A deploy resets the executor's coordinator mid-job — the job itself
+      // survives, because it runs in a container. Dying here would report a
+      // healthy job as a failure.
+      if (!isTransient(error, signal)) throw error;
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= maxConsecutiveErrors) throw error;
+      onTransientError?.(error as TransientError, consecutiveErrors);
+      await sleep(intervalMs, signal);
+      continue;
+    }
+
     await drainLogs();
 
     if (job.status !== reported) {
@@ -64,6 +111,22 @@ export async function waitForJob(
 
     await sleep(intervalMs, signal);
   }
+}
+
+/**
+ * Is this worth asking again?
+ *
+ * Server-side and transport failures are: the executor is restarting, busy, or
+ * briefly unreachable, and the job it is watching is unaffected. A 4xx is not —
+ * a rejected token or an unknown job will answer the same way forever. A rate
+ * limit is the one 4xx that will pass.
+ */
+function isTransient(error: unknown, signal?: AbortSignal): boolean {
+  // An aborted fetch also arrives without a status; the caller asked for that.
+  if (signal?.aborted) return false;
+  const status = (error as TransientError | undefined)?.status;
+  if (status === undefined) return true;
+  return status >= 500 || status === 429;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

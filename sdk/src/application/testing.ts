@@ -42,10 +42,15 @@ export class FakeJobGateway implements JobGateway {
   }
 
   async get(_jobId: string): Promise<JobRecord> {
-    this.onGet?.(this.gets);
-    this.calls.push('get');
-    const state = this.states[Math.min(this.gets, this.states.length - 1)];
+    // Counted before the hook runs, so a hook that throws — scripting a wobbling
+    // executor — still advances to the next scripted answer. Otherwise the same
+    // failure repeats forever and any retry looks broken.
+    const attempt = this.gets;
     this.gets += 1;
+
+    this.onGet?.(attempt);
+    this.calls.push('get');
+    const state = this.states[Math.min(attempt, this.states.length - 1)];
     if (!state) throw new Error('the test scripted no states');
     return state;
   }
