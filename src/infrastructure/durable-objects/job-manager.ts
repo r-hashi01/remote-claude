@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { JobService, SWEEP_INTERVAL_MS } from '../../application/job-service';
+import { claudeProcessEnvironment } from '../../domain/agent/environment';
 import type { JobRecord, JobRequest, JobSummary, LogLine } from '../../domain/job/record';
 import type { SandboxLedger } from '../../domain/sandbox/ledger';
 import { createRedactor } from '../../domain/redaction/redactor';
@@ -64,7 +65,12 @@ export class JobManager extends DurableObject<Env> {
         env.R2_SECRET_ACCESS_KEY,
       ]),
       runnerSource: RUNNER_SOURCE,
-      containerEnvironment: () => containerEnvironment(env, config.claudeAuthMode),
+      containerEnvironment: () =>
+        claudeProcessEnvironment({
+          authMode: config.claudeAuthMode,
+          oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+          ci: true,
+        }),
     });
 
     ctx.blockConcurrencyWhile(async () => {
@@ -136,28 +142,6 @@ export class JobManager extends DurableObject<Env> {
   async alarm(): Promise<void> {
     await this.service.tick();
   }
-}
-
-/**
- * Environment for the container runner.
- *
- * `undefined` unsets. The OAuth value is a sentinel in proxy mode — the real
- * token is swapped in by the Worker's outbound handler and never enters the
- * container (ADR 0002).
- */
-function containerEnvironment(
-  env: Env,
-  authMode: 'proxy' | 'direct'
-): Record<string, string | undefined> {
-  return {
-    ANTHROPIC_API_KEY: undefined,
-    ANTHROPIC_AUTH_TOKEN: undefined,
-    ANTHROPIC_BASE_URL: undefined,
-    CLAUDE_CODE_OAUTH_TOKEN:
-      authMode === 'proxy' ? 'proxy-injected' : env.CLAUDE_CODE_OAUTH_TOKEN,
-    IS_SANDBOX: '1',
-    CI: '1',
-  };
 }
 
 function newJobId(): string {
