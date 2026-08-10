@@ -129,6 +129,21 @@ provider への呼び出しを数えたときに出てきた。
 失敗したら clone へ fallback）か、config・env・README・provider のメソッドごと消す。
 **設定できるが効かない項目は、効かないことより「効くと読める」ことが問題。**
 
+### RC-15. startup で沈黙したまま死んだ runner は再試行できる
+
+**観測**: 最初の完走したカナリアの1本前が
+`runner stopped responding during "startup" (no heartbeat for 91s). (runner produced no output)`
+で落ちた。**同じジョブをそのまま投げ直したら完走した**ので、コンテナ側の一時的な失敗。
+
+いま再試行するのは `launch()` が例外を投げた場合だけで、この経路は対象外。だが
+**status.json も runner.out も空という状態は「runner が何も実行していない」ことを意味する**
+（runner は最初に status.json を書く）。つまり ADR 0006 の「runner が起動する前だけ再試行できる」
+という条件を満たしている。
+
+**やること**: `unresponsive` かつ phase が startup かつ runner の出力が空、という条件で
+`shouldRetryLaunch` と同じ扱いにする。**条件を緩めないこと** — 出力が1行でもあれば
+何かが走った可能性がある。
+
 ### RC-11. ACP セッションを層の内側に入れる
 
 **観測**: `AgentSession` は再編成の外に残っている。`loadConfig` と `getSandboxProvider` を
