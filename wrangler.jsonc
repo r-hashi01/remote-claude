@@ -113,7 +113,7 @@
     // sandbox can stay awake.
     "SANDBOX_SLEEP_AFTER": "2m",
 
-    "ALLOW_PUSH": "false",
+    "ALLOW_PUSH": "true",
 
     // Whether a job may name a repository other than REPO_URL.
     //
