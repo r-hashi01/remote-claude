@@ -568,7 +568,12 @@ Dashboard → Workers & Pages → remote-claude → Containers からもイン�
 
 ---
 
-## Workspace cache（第2段階・任意）
+## Workspace cache（未配線）
+
+> **現状これは動かない。** `WORKSPACE_CACHE` / `WORKSPACE_CACHE_TTL` / `BACKUP_BUCKET` は
+> 読み込まれ、Sandbox provider に `snapshot()` / `restore()` もあるが、
+> **ジョブの経路がそれを一度も呼んでいない。** `on` にしても毎回 fresh clone になる。
+> 以下は配線したときの設計として残してある（roadmap RC-10）。
 
 毎回 `clone` + `install` をやり直すのが遅い場合、Sandbox SDK公式のbackup/restore（R2）でキャッシュできる。
 **初期構成ではoff**。まずclone方式で動かしてから有効化すること。

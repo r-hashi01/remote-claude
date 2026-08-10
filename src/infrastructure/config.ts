@@ -15,7 +15,6 @@ import type { Env } from './env';
  */
 export interface Config extends ExecutorPolicy {
   claudeAuthMode: 'proxy' | 'direct';
-  allowPush: boolean;
   workspaceCache: boolean;
   workspaceCacheTtl: number;
   allowedHosts: string[];

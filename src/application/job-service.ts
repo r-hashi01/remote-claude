@@ -140,6 +140,19 @@ export class JobService {
     // this call rather than a job that fails minutes later on clone.
     if (isCustom) await github.assertRepositoryReachable(repo);
 
+    // Refused rather than quietly dropped. ALLOW_PUSH was read into config and
+    // then never consulted, so a caller could ask for a push on a deployment
+    // that was configured to forbid it and the runner would try — and a caller
+    // who asked for a push and got a branch that was never pushed has been
+    // misinformed either way.
+    if (request.push === true && !policy.allowPush) {
+      throw new Error(
+        'this executor will not push: pushing is disabled on it. Set ALLOW_PUSH=true in its ' +
+          'wrangler.jsonc vars and give its GitHub App Contents: Read and write, or fetch the ' +
+          'diff and apply it yourself.'
+      );
+    }
+
     const job = Job.create({
       id: ids.next(),
       prompt: request.prompt,

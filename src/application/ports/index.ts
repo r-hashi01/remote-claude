@@ -111,6 +111,8 @@ export interface ExecutorPolicy {
   repoUrl: string;
   defaultBaseBranch: string;
   allowCustomRepo: boolean;
+  /** Whether a job may push its branch. */
+  allowPush: boolean;
   maxConcurrency: number;
   jobTimeoutMs: number;
   claudeTimeoutMs: number;
