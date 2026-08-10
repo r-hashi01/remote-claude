@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { NdjsonBuffer, translateEvent } from './acp';
+import { describeUpdate, NdjsonBuffer, translateEvent } from './acp';
 
 /**
  * The translator is the one place where Claude Code's event stream is given
@@ -142,6 +142,73 @@ describe('translateEvent', () => {
   // job down.
   test('unknown event types are ignored rather than fatal', () => {
     expect(translateEvent({ type: 'rate_limit_event', foo: 1 }).updates).toEqual([]);
+  });
+});
+
+describe('describeUpdate', () => {
+  // job-service mirrors this straight into the job log, so it decides what a
+  // human watching a job actually sees.
+  test('an agent message chunk becomes its trimmed text', () => {
+    expect(
+      describeUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '  Hello  ' } })
+    ).toBe('Hello');
+  });
+
+  test('a whitespace-only message chunk is null', () => {
+    expect(
+      describeUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '   ' } })
+    ).toBeNull();
+  });
+
+  test('a non-text message chunk is null', () => {
+    expect(
+      describeUpdate({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'image', mimeType: 'image/png', data: 'xx' },
+      })
+    ).toBeNull();
+  });
+
+  // Thinking is noise in a job log; the ACP client shows it instead.
+  test('a thought chunk is always null', () => {
+    expect(
+      describeUpdate({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hmm' } })
+    ).toBeNull();
+  });
+
+  test('a tool call is a bulleted title', () => {
+    expect(
+      describeUpdate({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Edit a.ts' })
+    ).toBe('· Edit a.ts');
+  });
+
+  test('a failed tool call update names the call', () => {
+    expect(
+      describeUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'failed' })
+    ).toBe('· tool call failed (t1)');
+  });
+
+  test('a non-failed tool call update is null', () => {
+    expect(
+      describeUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed' })
+    ).toBeNull();
+  });
+
+  test('a plan joins its entries with " / "', () => {
+    expect(
+      describeUpdate({
+        sessionUpdate: 'plan',
+        entries: [
+          { content: 'Read code', priority: 'medium', status: 'completed' },
+          { content: 'Fix bug', priority: 'medium', status: 'in_progress' },
+        ],
+      })
+    ).toBe('· plan: Read code / Fix bug');
+  });
+
+  // usage_update is a real SessionUpdate variant with no one-line log form.
+  test('a session update with no log form is null', () => {
+    expect(describeUpdate({ sessionUpdate: 'usage_update', used: 10, size: 200_000 })).toBeNull();
   });
 });
 
