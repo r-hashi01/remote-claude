@@ -1,3 +1,4 @@
+import { claudeProcessEnvironment } from '../../domain/agent/environment';
 import { patternOnlyRedactor } from '../../domain/redaction/redactor';
 import { shellQuote } from '../../domain/shell/quote';
 import { loadConfig } from '../config';
@@ -27,13 +28,14 @@ export async function probeClaudeAuth(env: Env): Promise<Response> {
       {
         cwd: '/workspace',
         timeoutMs: 120_000,
-        env: {
-          ANTHROPIC_API_KEY: undefined,
-          ANTHROPIC_AUTH_TOKEN: undefined,
-          CLAUDE_CODE_OAUTH_TOKEN:
-            config.claudeAuthMode === 'proxy' ? 'proxy-injected' : env.CLAUDE_CODE_OAUTH_TOKEN,
-          IS_SANDBOX: '1',
-        },
+        // ANTHROPIC_BASE_URL is unset here too (it wasn't before) — otherwise the
+        // probe could inherit a base URL meant for the proxy and validate the
+        // wrong endpoint (ADR 0002).
+        env: claudeProcessEnvironment({
+          authMode: config.claudeAuthMode,
+          oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+          ci: false,
+        }),
       }
     );
 

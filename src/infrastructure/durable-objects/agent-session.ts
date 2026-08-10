@@ -8,9 +8,10 @@ import {
   type SessionUpdate,
   type StopReason,
 } from '../../domain/agent/acp';
+import { buildClaudeCommand } from '../../domain/agent/command';
+import { claudeProcessEnvironment } from '../../domain/agent/environment';
 import { loadConfig, type Config } from '../config';
 import { createRedactor, type Redactor } from '../../domain/redaction/redactor';
-import { shellQuote } from '../../domain/shell/quote';
 import type { Env } from '../env';
 
 const REPO_DIR = '/workspace/repo';
@@ -173,7 +174,11 @@ export class AgentSession extends DurableObject<Env> {
       const exec = sandbox.exec(command, {
         cwd: REPO_DIR,
         timeoutMs: config.claudeTimeoutMs,
-        env: claudeEnvironment(this.env, config),
+        env: claudeProcessEnvironment({
+          authMode: config.claudeAuthMode,
+          oauthToken: this.env.CLAUDE_CODE_OAUTH_TOKEN,
+          ci: false,
+        }),
         onOutput: (stream, data) => {
           if (stream !== 'stdout') return;
           for (const event of buffer.push(data)) {
@@ -266,31 +271,6 @@ export class AgentSession extends DurableObject<Env> {
 }
 
 // -------------------------------------------------------------- helpers
-
-function buildClaudeCommand(prompt: string, resumeId: string | null): string {
-  const parts = [
-    'unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN;',
-    'claude -p',
-    shellQuote(prompt),
-    '--output-format stream-json',
-    // stream-json output is rejected without --verbose.
-    '--verbose',
-    '--permission-mode bypassPermissions',
-  ];
-  if (resumeId) parts.push('--resume', shellQuote(resumeId));
-  return parts.join(' ');
-}
-
-function claudeEnvironment(env: Env, config: Config): Record<string, string | undefined> {
-  return {
-    ANTHROPIC_API_KEY: undefined,
-    ANTHROPIC_AUTH_TOKEN: undefined,
-    ANTHROPIC_BASE_URL: undefined,
-    CLAUDE_CODE_OAUTH_TOKEN:
-      config.claudeAuthMode === 'proxy' ? 'proxy-injected' : env.CLAUDE_CODE_OAUTH_TOKEN,
-    IS_SANDBOX: '1',
-  };
-}
 
 function encodeSse(id: number, data: string): Uint8Array {
   return new TextEncoder().encode(`id: ${id}\ndata: ${data}\n\n`);
