@@ -400,6 +400,62 @@ describe('following a running job', () => {
     expect(sandbox.killed).toBe(true);
   });
 
+  // Twice in five launches the runner started, wrote no status and printed
+  // nothing. Both absent means nothing ran, so this is the pre-runner window.
+  test('requeues a runner that started and reported nothing at all', async () => {
+    const h = await started();
+
+    h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
+    await h.service.tick();
+
+    const job = h.jobs.load(h.jobId);
+    expect(job?.status).toBe('queued');
+    expect(job?.attempts).toBe(1);
+    expect(h.logs.all(h.jobId).join('\n')).toMatch(/reported nothing/);
+    expect(h.sandboxes.get(`rc-${h.jobId}`).destroyed).toBe(true);
+  });
+
+  test('a runner that printed something is failed, not retried', async () => {
+    const h = await started();
+    h.sandboxes.get(`rc-${h.jobId}`).files.set(`${STATE_DIR}/runner.out`, 'Error: out of memory');
+
+    h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
+    await h.service.tick();
+
+    expect(h.jobs.load(h.jobId)?.status).toBe('failed');
+  });
+
+  test('stops requeueing once the attempts are spent, and says whether the launcher ran', async () => {
+    const h = await started();
+    const record = h.jobs.load(h.jobId)!;
+    record.requeue({ attempts: 2 });
+    record.start(h.clock.now());
+    record.markRunning();
+    h.jobs.save(record);
+    h.sandboxes.get(`rc-${h.jobId}`).files.set(`${STATE_DIR}/launched`, '2026-08-10T14:00:00Z');
+
+    h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
+    await h.service.tick();
+
+    const job = h.jobs.load(h.jobId);
+    expect(job?.status).toBe('failed');
+    expect(job?.error).toMatch(/launcher ran at 2026-08-10T14:00:00Z/);
+  });
+
+  test('says so when even the launch command left no trace', async () => {
+    const h = await started();
+    const record = h.jobs.load(h.jobId)!;
+    record.requeue({ attempts: 2 });
+    record.start(h.clock.now());
+    record.markRunning();
+    h.jobs.save(record);
+
+    h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
+    await h.service.tick();
+
+    expect(h.jobs.load(h.jobId)?.error).toMatch(/no launch marker/i);
+  });
+
   test('presumes a runner that beats but produces nothing is stuck', async () => {
     const h = await started();
     const sandbox = h.sandboxes.get(`rc-${h.jobId}`);

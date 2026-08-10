@@ -8,7 +8,7 @@ import { assessRunnerHealth, exceededDeadline } from '../domain/job/health';
 import { Job } from '../domain/job/job';
 import type { JobRecord, JobRequest, JobResult, JobSummary, LogLine } from '../domain/job/record';
 import { resolveRepository } from '../domain/job/repository';
-import { shouldRetryLaunch } from '../domain/job/retry';
+import { shouldRetryLaunch, shouldRetrySilentStartup } from '../domain/job/retry';
 import {
   sandboxIdForJob,
   shouldReclaim,
@@ -322,9 +322,13 @@ export class JobService {
       // artifact, so no drift (ADR 0007).
       await sandbox.writeFile(`${STATE_DIR}/runner.mjs`, this.deps.runnerSource);
 
-      // setsid + nohup so the runner outlives the shell this exec spawned.
+      // setsid + nohup so the runner outlives the shell this exec spawned. The
+      // marker is written first and separately: when a runner dies without
+      // printing anything, the only remaining question is whether this shell ran
+      // at all, and nothing in the sandbox could answer it.
       await sandbox.exec(
-        `mkdir -p ${STATE_DIR} && setsid nohup node ${STATE_DIR}/runner.mjs ${STATE_DIR} ` +
+        `mkdir -p ${STATE_DIR} && date -u +%Y-%m-%dT%H:%M:%SZ > ${STATE_DIR}/launched && ` +
+          `setsid nohup node ${STATE_DIR}/runner.mjs ${STATE_DIR} ` +
           `> ${STATE_DIR}/runner.out 2>&1 < /dev/null &`,
         {
           cwd: '/workspace',
@@ -450,10 +454,43 @@ export class JobService {
       // died. We were holding it the whole time and not reading it — knowing a
       // great deal about the runner's internals while failing to report the one
       // thing anyone needs.
-      const output = (await sandbox.readFile(`${STATE_DIR}/runner.out`))?.trim();
+      const output = (await sandbox.readFile(`${STATE_DIR}/runner.out`))?.trim() ?? '';
+
+      // A runner that wrote no status and printed nothing executed nothing, so
+      // this is still the pre-runner window and a retry has no side effects.
+      if (
+        shouldRetrySilentStartup({
+          runnerReportedStatus: status !== undefined,
+          runnerOutput: output,
+          attemptsSoFar: fresh.attempts,
+        })
+      ) {
+        const attempts = fresh.attempts + 1;
+        this.log(
+          jobId,
+          'system',
+          `runner started and reported nothing (attempt ${attempts}); requeued`
+        );
+        running.end(jobId);
+        await this.teardown(jobId);
+        const current = jobs.load(jobId);
+        if (current) {
+          current.requeue({ attempts });
+          jobs.save(current);
+        }
+        return;
+      }
+
+      // Nothing to quote, so say which half of the start failed instead. The
+      // marker is written by the shell before it starts the runner: present means
+      // the command ran and the runner said nothing, absent means the command
+      // itself never got that far.
+      const launched = (await sandbox.readFile(`${STATE_DIR}/launched`))?.trim();
       const detail = output
         ? `\nrunner output:\n${output.slice(-RUNNER_OUTPUT_TAIL)}`
-        : ' (runner produced no output)';
+        : launched
+          ? ` The launcher ran at ${launched} but the runner printed nothing.`
+          : ' No launch marker was written, so the start command itself may never have run.';
 
       await this.stopContainer(jobId);
       await this.settle(jobId, 'failed', `${health.reason}${detail}`);

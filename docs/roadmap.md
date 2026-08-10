@@ -129,7 +129,15 @@ provider への呼び出しを数えたときに出てきた。
 失敗したら clone へ fallback）か、config・env・README・provider のメソッドごと消す。
 **設定できるが効かない項目は、効かないことより「効くと読める」ことが問題。**
 
-### RC-15. startup で沈黙したまま死んだ runner は再試行できる
+### ~~RC-15. startup で沈黙したまま死んだ runner は再試行できる~~ → 対応済み
+
+**5回の起動のうち2回**これで落ちた（RC-11 を委譲したジョブを含む）。稀ではない。
+`shouldRetrySilentStartup` として実装し、status.json も出力も無い場合だけ requeue する。
+併せて **launch marker** を追加した（shell が runner を起動する前に `launched` を書く）。
+これで「shell が走ったが runner が黙っていた」と「shell 自体が走らなかった」が区別できる。
+**原因はまだ分かっていない。** marker は次に起きたときに切り分けるために入れた。
+
+<details><summary>当初の記述</summary>
 
 **観測**: 最初の完走したカナリアの1本前が
 `runner stopped responding during "startup" (no heartbeat for 91s). (runner produced no output)`
@@ -143,6 +151,8 @@ provider への呼び出しを数えたときに出てきた。
 **やること**: `unresponsive` かつ phase が startup かつ runner の出力が空、という条件で
 `shouldRetryLaunch` と同じ扱いにする。**条件を緩めないこと** — 出力が1行でもあれば
 何かが走った可能性がある。
+
+</details>
 
 ### RC-11. ACP セッションを層の内側に入れる
 
