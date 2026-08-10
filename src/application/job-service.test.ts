@@ -22,6 +22,7 @@ function policy(overrides: Partial<ExecutorPolicy> = {}): ExecutorPolicy {
     repoUrl: CONFIGURED_REPO,
     defaultBaseBranch: 'main',
     allowCustomRepo: true,
+    allowPush: false,
     maxConcurrency: 2,
     jobTimeoutMs: 30 * 60 * 1000,
     claudeTimeoutMs: 25 * 60 * 1000,
@@ -131,6 +132,32 @@ describe('accepting a job', () => {
 
     expect(job.repo).toBe(CONFIGURED_REPO);
     expect(github.checked).toEqual([]);
+  });
+
+  // ALLOW_PUSH was read into config and then never consulted: a job asking to
+  // push got one, on a deployment configured to forbid it.
+  test('refuses a push when the executor forbids pushing', async () => {
+    const { service } = harness({ policy: policy({ allowPush: false }) });
+
+    await expect(service.createJob({ prompt: 'x', push: true })).rejects.toThrow(
+      /pushing is disabled on it.*ALLOW_PUSH=true/s
+    );
+  });
+
+  test('passes the push through when the executor allows it', async () => {
+    const { service, sandboxes } = harness({ policy: policy({ allowPush: true }) });
+
+    const job = await service.createJob({ prompt: 'x', push: true });
+    await service.tick();
+
+    expect(job.options.push).toBe(true);
+    const written = sandboxes.get(`rc-${job.id}`).files.get(`${STATE_DIR}/job.json`) as string;
+    expect(JSON.parse(written).options.push).toBe(true);
+  });
+
+  test('a job that never asked to push is unaffected by the switch', async () => {
+    const { service } = harness({ policy: policy({ allowPush: false }) });
+    expect((await service.createJob({ prompt: 'x' })).options.push).toBe(false);
   });
 
   test('forgets jobs past the retention window', async () => {

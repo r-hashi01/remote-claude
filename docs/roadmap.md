@@ -104,6 +104,50 @@ ACP レイヤーは実装済みだがジョブ経路に繋がっていない。*
 実際にジョブを完走させること。ユニットテストは
 `src/application/job-service.test.ts` が覆っている（許可・拒否・到達不可・同一repoの別表記）。
 
+### RC-14. install / lint / test コマンドを repo ごとに決める
+
+**観測**: `INSTALL_COMMAND` / `LINT_COMMAND` は **deployment 単位**の設定で、いまは
+spindle 用の値（`npm --prefix packages/spindle-core ci ...`）が入っている。
+`ALLOW_CUSTOM_REPO` を開けた（ADR 0010）ことで、**pinned repo 以外に投げると install step が
+存在しないパスを叩いて失敗する**という形で表に出た。remote-claude 自身に投げるには
+`--skip-checks` が必須になっている（`.claude/skills/delegate/SKILL.md` にその旨を書いた）。
+
+**やること**: ジョブのオプションで上書きできるようにするか、repo 側の
+`package.json` / `AGENTS.md` から決めるか。**設定の単位が deployment なのに、
+対象の単位が job になっている**のが食い違いの本体。
+
+### RC-10. Workspace cache を配線するか、消す
+
+**観測**: `WORKSPACE_CACHE` / `WORKSPACE_CACHE_TTL` / `BACKUP_BUCKET` は config に読み込まれ、
+Sandbox provider は `snapshot()` / `restore()` を実装していて、README には有効化手順と
+R2 cleanup の節がある。**しかしジョブの経路がそれを一度も呼んでいない。**
+`on` にしても毎回 fresh clone になる。層分け（ADR 0008）で `application` から
+provider への呼び出しを数えたときに出てきた。
+
+**やること**: どちらかに決める。配線する（`launch` の clone を restore→fetch に置き換え、
+失敗したら clone へ fallback）か、config・env・README・provider のメソッドごと消す。
+**設定できるが効かない項目は、効かないことより「効くと読める」ことが問題。**
+
+### RC-11. ACP セッションを層の内側に入れる
+
+**観測**: `AgentSession` は再編成の外に残っている。`loadConfig` と `getSandboxProvider` を
+直接呼び、テストが1つも無く、**repo は常に `REPO_URL`**（`ALLOW_CUSTOM_REPO` を尊重しない）。
+RC-7（ジョブ経路との接続）と同じ場所を触るので、順序はRC-7の前。
+
+### RC-12. CLI と dashboard を SDK に載せ替える
+
+**観測**: `sdk/` を出した目的は「利用者がHTTPを手書きしない」ことだが、
+**このリポジトリ自身の CLI (`cli/remote-claude.mjs`) と dashboard が独自の fetch を持っている。**
+`.mjs` なので TS package をそのまま import できないのが理由だが、`npm run sdk:build` 後の
+`sdk/dist` は import できる。SDKの最初の利用者が自分自身でないのは、契約検査の穴になる。
+
+### RC-13. interface 層のテスト
+
+**観測**: `domain` と `application` は146件で覆われているが、`interface/http` は0件。
+`authorize()` は fail-closed（token未設定なら503）が要で、そこを固定したい。
+ただし `crypto.subtle.timingSafeEqual` は workerd 固有で、いまの vitest (node) では走らない。
+**やること**: `@cloudflare/vitest-pool-workers` を足すか、比較関数をポートにする。
+
 ### RC-9. SDK の publish
 
 `sdk/` は package として成立していて CI が build まで通すが、**まだ npm に publish していない**。
