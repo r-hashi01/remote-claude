@@ -14,7 +14,7 @@
     "sdk:build": "npm --prefix sdk run build",
     "sdk:typecheck": "npm --prefix sdk run typecheck",
     "embed": "node scripts/embed-runner.mjs",
-    "pretypecheck": "node scripts/embed-runner.mjs",
+    "pretypecheck": "node scripts/embed-runner.mjs && wrangler types",
     "run:local": "node scripts/run-locally.mjs"
   },
   "devDependencies": {
