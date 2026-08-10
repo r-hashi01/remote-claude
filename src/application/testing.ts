@@ -12,6 +12,7 @@ import type { JobStatus, LogLine, LogStream } from '../domain/job/record';
 import type { SandboxLedgerEntry } from '../domain/sandbox/ledger';
 import type {
   ArtifactStore,
+  Background,
   Clock,
   CreateSandboxOptions,
   ExecOptions,
@@ -25,7 +26,10 @@ import type {
   SandboxProvider,
   SandboxSession,
   Scheduler,
+  SessionState,
+  SessionStore,
   SnapshotRef,
+  UpdateSink,
 } from './ports';
 
 export class FakeClock implements Clock {
@@ -246,6 +250,24 @@ export class DenyAllGitHub implements GitHubAccess {
 }
 
 /**
+ * One scripted `exec` call, consumed in order by `FakeSandbox.exec`.
+ *
+ * Lets a test play back an agent's stdout through `onOutput` the way a real
+ * `claude` invocation would.
+ */
+export interface ExecScript {
+  /** Lines delivered one at a time on the stdout stream via `onOutput`. */
+  stdout?: string[];
+  result?: ExecResult;
+  /**
+   * Never settle, as a still-running process would not. `killAll()` only
+   * marks the sandbox killed; ending the turn is the caller's own abort race,
+   * exactly as it would be against a real sandbox.
+   */
+  hang?: boolean;
+}
+
+/**
  * A sandbox whose filesystem is a Map and whose `exec` is scripted.
  *
  * The runner's state files are the contract between the container and the
@@ -258,13 +280,20 @@ export class FakeSandbox implements SandboxSession {
   destroyed = false;
   killed = false;
   cloned: { repo: string; branch?: string } | null = null;
+  cloneCount = 0;
   /** Set to make the next clone fail, as a missing branch or lost access would. */
   cloneError: string | null = null;
   execError: string | null = null;
+  private readonly execScripts: ExecScript[] = [];
 
   constructor(readonly id: string) {}
 
-  async exec(command: string, _options?: ExecOptions): Promise<ExecResult> {
+  /** Queue scripted `exec` calls, consumed one per call in order. */
+  script(...scripts: ExecScript[]): void {
+    this.execScripts.push(...scripts);
+  }
+
+  async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
     this.commands.push(command);
     if (this.execError) throw new Error(this.execError);
 
@@ -276,12 +305,26 @@ export class FakeSandbox implements SandboxSession {
       const lines = body.split('\n').filter(Boolean).slice(from - 1);
       return { success: true, exitCode: 0, stdout: lines.join('\n'), stderr: '' };
     }
-    return { success: true, exitCode: 0, stdout: '', stderr: '' };
+
+    const script = this.execScripts.shift();
+    if (!script) return { success: true, exitCode: 0, stdout: '', stderr: '' };
+
+    for (const line of script.stdout ?? []) {
+      options?.onOutput?.('stdout', line.endsWith('\n') ? line : `${line}\n`);
+    }
+
+    // Never settles: a real process that's still running doesn't hand back a
+    // result just because it was asked to die. What ends the turn is the
+    // caller's own abort race, exactly as it would against a real sandbox.
+    if (script.hang) return new Promise<ExecResult>(() => {});
+
+    return script.result ?? { success: true, exitCode: 0, stdout: '', stderr: '' };
   }
 
   async cloneRepository(repoUrl: string, options: { branch?: string }): Promise<void> {
     if (this.cloneError) throw new Error(this.cloneError);
     this.cloned = { repo: repoUrl, branch: options.branch };
+    this.cloneCount += 1;
   }
 
   async writeFile(path: string, content: string): Promise<void> {
@@ -327,5 +370,47 @@ export class FakeSandboxProvider implements SandboxProvider {
     const sandbox = new FakeSandbox(sandboxId);
     this.sandboxes.set(sandboxId, sandbox);
     return sandbox;
+  }
+}
+
+export class InMemorySessionStore implements SessionStore {
+  private state: SessionState = {};
+
+  load(): SessionState {
+    return { ...this.state };
+  }
+
+  save(patch: Partial<SessionState>): void {
+    this.state = { ...this.state, ...patch };
+  }
+
+  clear(): void {
+    this.state = {};
+  }
+}
+
+export class RecordingUpdateSink implements UpdateSink {
+  readonly messages: unknown[] = [];
+
+  emit(message: unknown): void {
+    this.messages.push(message);
+  }
+}
+
+/**
+ * Runs work right away and keeps a handle on it, so a test can await
+ * `settle()` instead of racing real microtask timing to observe the result of
+ * a `prompt()` call.
+ */
+export class ImmediateBackground implements Background {
+  private readonly pending: Promise<void>[] = [];
+
+  run(work: () => Promise<void>): void {
+    this.pending.push(work());
+  }
+
+  /** Wait for everything scheduled so far to finish. */
+  async settle(): Promise<void> {
+    await Promise.all(this.pending.splice(0));
   }
 }

@@ -101,6 +101,30 @@ export interface RunningJobs {
 /** Secret masking, as a function so the application never holds the secrets. */
 export type Redact = (input: string) => string;
 
+/** One session's persisted facts. The Durable Object's meta table implements this. */
+export interface SessionState {
+  claudeSessionId?: string;
+  prepared?: boolean;
+  repo?: string;
+  baseBranch?: string;
+}
+export interface SessionStore {
+  load(): SessionState;
+  /** Merge — only the keys present in the patch are updated. */
+  save(state: Partial<SessionState>): void;
+  clear(): void;
+}
+
+/** Where a session update goes. The Durable Object persists it to SQLite and fans it out over SSE. */
+export interface UpdateSink {
+  emit(message: unknown): void;
+}
+
+/** Run outside the caller's request. The Durable Object implements this with ctx.waitUntil. */
+export interface Background {
+  run(work: () => Promise<void>): void;
+}
+
 /**
  * The deployment's settings, as the application needs them.
  *
