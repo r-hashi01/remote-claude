@@ -730,6 +730,32 @@ container内に `ANTHROPIC_API_KEY` が存在している。Dockerfileや `vars`
 `wrangler.jsonc` の `instance_type` を `"basic"` → `"standard"` に上げる。
 コストは上がるので、必要になってからにすること。
 
+### deploy が30秒で失敗する（`CLOUDFLARE_API_TOKEN` 未設定）
+
+```
+✘ [ERROR] In a non-interactive environment, it's necessary to set a
+  CLOUDFLARE_API_TOKEN environment variable for wrangler to work.
+```
+
+repository secret が無い。**`CLOUDFLARE_ACCOUNT_ID` だけ設定されていて token が無い状態が
+いちばん紛らわしい**（env の行に名前は出るが値が空）。確認と設定:
+
+```bash
+gh secret list                      # CLOUDFLARE_API_TOKEN が並んでいるか
+gh secret set CLOUDFLARE_API_TOKEN  # Dashboard → My Profile → API Tokens で発行した値
+```
+
+これが無いあいだ `git push` は deploy しない（typecheck と test までは通る）。
+**live に上がっているのは最後に手元から deploy したバージョン**なので、
+push したのに挙動が変わらないときはここを疑う。
+
+手元から deploy する場合は認証が必要。Docker も動いている必要がある（imageをbuildするため）:
+
+```bash
+npx wrangler login    # 対話が必要。`! npx wrangler login` で実行する
+npx wrangler deploy
+```
+
 ### Docker build が GitHub Actions で失敗する
 base imageに存在しないコマンドを `Dockerfile` に足していないか確認（例: `corepack` は入っていない）。
 ローカルで再現するには `cd remote-claude && npx wrangler deploy --dry-run --outdir /tmp/build`。
