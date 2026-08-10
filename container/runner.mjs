@@ -340,6 +340,26 @@ async function main() {
     log('system', 'Claude Code produced no file changes');
   }
 
+  // Push only what was committed, and only when asked. A failed push must not
+  // lose the diff — it is still worth applying by hand, which is what the whole
+  // loop did before this existed.
+  let pushed = false;
+  if (changed && options.push) {
+    setStatus('pushing');
+    const push = await run(
+      'git-push',
+      `git -C ${REPO_DIR} push --set-upstream origin ${shellQuote(job.branch)}`,
+      { timeoutMs: job.stepTimeoutMs, allowFailure: true }
+    );
+    pushed = push.success;
+    if (!pushed) {
+      log(
+        'system',
+        'push failed; the diff is still available. The GitHub App needs Contents: Read and write.'
+      );
+    }
+  }
+
   const range = `${shellQuote(job.baseBranch)}..HEAD`;
   const status = await run('git-status', `git -C ${REPO_DIR} status --short --branch`, { allowFailure: true });
   const diffStat = await run('git-diff-stat', `git -C ${REPO_DIR} diff --stat ${range}`, { allowFailure: true });
@@ -357,7 +377,7 @@ async function main() {
     changed,
     commitSha,
     branch: job.branch,
-    pushed: false,
+    pushed,
     gitStatus: status.output.trim(),
     diffStat: diffStat.output.trim(),
     diffBytes: patchText.length,

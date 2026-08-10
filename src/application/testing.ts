@@ -237,14 +237,29 @@ export class InMemoryRunningJobs implements RunningJobs {
 
 export class AllowAllGitHub implements GitHubAccess {
   readonly checked: string[] = [];
+  readonly checkedForWriting: string[] = [];
   async assertRepositoryReachable(repoUrl: string): Promise<void> {
     this.checked.push(repoUrl);
+  }
+  async assertRepositoryWritable(repoUrl: string): Promise<void> {
+    this.checkedForWriting.push(repoUrl);
+  }
+}
+
+/** Reachable, but read-only — the posture a fresh GitHub App is set up with. */
+export class ReadOnlyGitHub implements GitHubAccess {
+  async assertRepositoryReachable(): Promise<void> {}
+  async assertRepositoryWritable(): Promise<void> {
+    throw new Error('the GitHub App installation cannot write to o/r; grant Contents: Read and write');
   }
 }
 
 export class DenyAllGitHub implements GitHubAccess {
   constructor(private readonly message = 'cannot reach that repository') {}
   async assertRepositoryReachable(): Promise<void> {
+    throw new Error(this.message);
+  }
+  async assertRepositoryWritable(): Promise<void> {
     throw new Error(this.message);
   }
 }

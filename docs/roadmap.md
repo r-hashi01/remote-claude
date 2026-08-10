@@ -78,12 +78,27 @@ in-memory であり、2秒ごとの alarm の合間にオブジェクトが退�
 ポーリング単位でバッチが完結するため、ポーリングを跨いで保持する意味はない。
 `mirrorLogs` の中でフラッシュするようにして解消。バッチ化の利点（1ポーリング1挿入）は保たれる。
 
-### RC-6. push と PR 作成
+### RC-6. push と PR 作成 → push は実装済み / PR 作成は未着手
 
-**観測**: 現状 diff を手元に持ち帰って `git apply` する運用。ループが閉じていない。
+**観測**: 1日で4本のジョブの成果を**すべて手で** `git apply` → commit → PR した。ループが閉じていない。
 
-**やること**: `ALLOW_PUSH` を実際に通し、PR 作成をジョブのオプションにする。
-GitHub App の権限を Contents: Read and write に上げる必要がある。
+**着手して分かったこと**: `push` は実装されていなかった。**`pushed: false` が runner に
+ハードコードされていた**まま、`push: true` は受け付けられ `ALLOW_PUSH` で門番もしていた。
+「設定できるが効かない」の型なのに、直前の棚卸しはこれを取りこぼしている
+（env var と client の耐性は見て、**request option を見ていなかった**）。
+
+**やったこと**:
+- runner が実際に push する（コミットが生まれたときだけ、失敗してもジョブは失敗させない）
+- **書けるかどうかを GitHub に聞く** — `assertRepositoryWritable`。ADR 0010 と同じ考え方で、
+  20分かけてから `git push` で落ちるのではなく受付時に拒否する
+- 到達性チェックと同じ1本の GitHub 呼び出しに畳んだ（`fetchRepository`）
+
+**残り**: PR 作成。これは runner ではなく **Worker 側**でやるべき（control plane の仕事で、
+`api.github.com` への認証も Worker が持っている）。リクエストの形
+（`pr: true` か `pullRequest: {title, body}` か）を決めるのが先。
+
+**未検証**: live で push が通ること。GitHub App の Contents を Read and write に上げ、
+インストール先で承認する操作が必要。
 
 ---
 

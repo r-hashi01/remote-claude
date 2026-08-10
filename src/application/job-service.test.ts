@@ -4,6 +4,7 @@ import type { ExecutorPolicy } from './ports';
 import {
   AllowAllGitHub,
   DenyAllGitHub,
+  ReadOnlyGitHub,
   FakeClock,
   FakeIds,
   FakeSandboxProvider,
@@ -142,6 +143,37 @@ describe('accepting a job', () => {
     await expect(service.createJob({ prompt: 'x', push: true })).rejects.toThrow(
       /pushing is disabled on it.*ALLOW_PUSH=true/s
     );
+  });
+
+  // The runner never pushed at all: `pushed: false` was hard-coded in the
+  // result while the option was accepted and gated. So "may this job push" now
+  // has two answers to satisfy — the deployment's switch, and the credential.
+  test('asks GitHub whether the credential can write before accepting a push', async () => {
+    const github = new AllowAllGitHub();
+    const { service } = harness({ policy: policy({ allowPush: true }), github });
+
+    await service.createJob({ prompt: 'x', push: true });
+
+    expect(github.checkedForWriting).toEqual([CONFIGURED_REPO]);
+  });
+
+  test('refuses a push the credential cannot deliver', async () => {
+    const { service, jobs } = harness({ policy: policy({ allowPush: true }), github: new ReadOnlyGitHub() });
+
+    await expect(service.createJob({ prompt: 'x', push: true })).rejects.toThrow(
+      /Contents: Read and write/
+    );
+    // Refused at the door: no job to produce a branch it could not deliver.
+    expect(jobs.listRecent(10)).toHaveLength(0);
+  });
+
+  test('a job that does not push is never asked about writing', async () => {
+    const github = new AllowAllGitHub();
+    const { service } = harness({ policy: policy({ allowPush: true }), github });
+
+    await service.createJob({ prompt: 'x' });
+
+    expect(github.checkedForWriting).toEqual([]);
   });
 
   test('passes the push through when the executor allows it', async () => {

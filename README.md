@@ -560,14 +560,25 @@ Worker側のログは `npx wrangler tail`。
 ./remote-claude apply <job-id>         # ローカルに適用
 ```
 
-### 後からpushを有効化する
+### push を有効化する
 
-1. `wrangler.jsonc` の `ALLOW_PUSH` を `"true"` に変更
-2. GitHub App の Permissions → Repository permissions → **Contents** を **Read and write** に上げる
-   （App設定画面で変更後、インストール先で「承認」が必要になる場合がある）
-3. task実行時に `--push` を付ける
+1. `wrangler.jsonc` の `ALLOW_PUSH` を `"true"` に変更して deploy
+2. GitHub App の Permissions → Repository permissions → **Contents** を **Read and write** に上げる。
+   **App設定を変えただけでは効かない**（インストール先で承認が必要）
+3. job に `--push`（CLI）または `"push": true`（API）を付ける
 
-Worker側の `ALLOW_PUSH` と task側の `--push` の**両方**が揃ったときだけpushする。
+3つ揃ったときだけ push する。**揃っていなければジョブ受付時に 400 で拒否する**:
+
+- `ALLOW_PUSH=false` → 「executor 側の設定である」と分かる文言
+- 権限が足りない → **GitHub に問い合わせて**「Contents: Read and write が必要」と返す。
+  ADR 0010 と同じ考え方で、**実際に書けるかを決めるのは設定ではなく credential**
+
+push するのは**コミットが生まれたときだけ**で、失敗してもジョブは失敗しない
+（diff は残るので手元で当てられる）。結果の `pushed` に実際に push できたかが入る。
+
+> **2026-08-11 まで、この機能は存在しなかった。** `push: true` は受け付けられ `ALLOW_PUSH` で
+> 門番もしていたが、runner は一度も push せず `pushed: false` を書いていた。
+> 「設定できるが効かない」の一例（roadmap の「同じ型の欠陥を洗う」参照）。
 
 ---
 

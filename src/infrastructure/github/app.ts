@@ -84,35 +84,42 @@ export async function getInstallationToken(env: Env): Promise<string> {
  */
 export async function assertRepositoryReachable(env: Env, repoUrl: string): Promise<void> {
   const slug = repositorySlug(repoUrl);
-  const token = await getInstallationToken(env);
   const installationId = env.GITHUB_APP_INSTALLATION_ID ?? 'the configured installation';
 
-  const response = await fetch(`https://api.github.com/repos/${slug}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'remote-claude',
-    },
-  });
+  if ((await fetchRepository(env, slug)) !== null) return;
 
-  if (response.ok) return;
+  throw new Error(
+    `this executor's GitHub App installation cannot reach ${slug}. The repository must be ` +
+      `added to installation ${installationId} (GitHub → Settings → Applications → the App → ` +
+      `Configure → Repository access) before a job can run against it.`
+  );
+}
 
-  // 404 rather than 403 is the usual answer for a repository outside the
-  // installation: GitHub does not confirm that private repositories exist to
-  // credentials that cannot see them.
-  if (response.status === 404 || response.status === 403) {
+/**
+ * Refuse a push the installation cannot deliver.
+ *
+ * Same shape as the reachability check and for the same reason: a job that will
+ * fail at `git push` after twenty minutes of work should be refused when it is
+ * submitted. GitHub reports what the installation may do on a repository, so ask
+ * it rather than inferring it from the App's configuration.
+ */
+export async function assertRepositoryWritable(env: Env, repoUrl: string): Promise<void> {
+  const slug = repositorySlug(repoUrl);
+  const repository = await fetchRepository(env, slug);
+
+  if (repository === null) {
     throw new Error(
-      `this executor's GitHub App installation cannot reach ${slug}. The repository must be ` +
-        `added to installation ${installationId} (GitHub → Settings → Applications → the App → ` +
-        `Configure → Repository access) before a job can run against it.`
+      `this executor's GitHub App installation cannot reach ${slug}, so it cannot push to it.`
     );
   }
-
-  const body = await response.text().catch(() => '');
-  throw new Error(
-    `could not confirm access to ${slug}: GitHub answered ${response.status} ${body.slice(0, 200)}`
-  );
+  if (repository.permissions?.push !== true) {
+    throw new Error(
+      `this executor's GitHub App installation cannot write to ${slug}. Its Contents permission ` +
+        'must be Read and write for a job to push (GitHub → Settings → Developer settings → ' +
+        'GitHub Apps → the App → Permissions), and permission changes have to be accepted on the ' +
+        'installation before they take effect.'
+    );
+  }
 }
 
 /** The `GitHubAccess` port, bound to this deployment's App installation. */
@@ -122,6 +129,39 @@ export class GitHubAppAccess implements GitHubAccess {
   assertRepositoryReachable(repoUrl: string): Promise<void> {
     return assertRepositoryReachable(this.env, repoUrl);
   }
+
+  assertRepositoryWritable(repoUrl: string): Promise<void> {
+    return assertRepositoryWritable(this.env, repoUrl);
+  }
+}
+
+interface Repository {
+  permissions?: { push?: boolean; pull?: boolean; admin?: boolean };
+}
+
+/** The repository as this installation sees it, or null when it cannot see it. */
+async function fetchRepository(env: Env, slug: string): Promise<Repository | null> {
+  const token = await getInstallationToken(env);
+  const response = await fetch(`https://api.github.com/repos/${slug}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'remote-claude',
+    },
+  });
+
+  // 404 rather than 403 is the usual answer for a repository outside the
+  // installation: GitHub does not confirm that private repositories exist to
+  // credentials that cannot see them.
+  if (response.status === 404 || response.status === 403) return null;
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(
+      `could not read ${slug} from GitHub: ${response.status} ${body.slice(0, 200)}`
+    );
+  }
+  return (await response.json()) as Repository;
 }
 
 async function mintInstallationToken(config: GitHubAppConfig): Promise<string> {
