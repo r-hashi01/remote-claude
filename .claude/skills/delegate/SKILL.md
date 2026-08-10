@@ -61,31 +61,54 @@ EOF
 )" --base main --skip-checks
 ```
 
-### `--skip-checks` について
+### コマンドは job ごとに渡す（重要）
 
 executor の `INSTALL_COMMAND` / `LINT_COMMAND` は **deployment 単位の設定**で、いまは
 spindle 用の値（`npm --prefix packages/spindle-core ...`）が入っている。
-**このリポジトリに対して走らせると install step が失敗してジョブが落ちる。**
-だから `--skip-checks` を付け、検証はプロンプト側で `npm test` として指示する。
+そして **`skipChecks` は lint/test/build にしか効かない — install は必ず走る。**
+つまり黙って投げると、対象が別 repo でも spindle の install が走って**ジョブが落ちる。**
 
-repo ごとにコマンドを決められるようにするのは roadmap RC-14。それが入るまでは上記で回す。
+実測（最初の dogfood ジョブ）:
+
+```
+[system] ▶ install
+[stderr] npm error The `npm ci` command can only install with an existing package-lock.json
+[system] ✖ install (exit 1, 874ms)
+[system] job failed: step "install" failed with exit code 1
+```
+
+なので **`commands` を job ごとに渡す。** 指定しなかったキーは deployment の値を継ぐ。
+空文字は「その step を skip」という**指示**なので、そう書けば skip になる。
+
+```ts
+const job = await rc.startJob({
+  prompt,
+  repo: 'https://github.com/r-hashi01/remote-claude.git',
+  commands: {
+    install: 'npm ci --no-audit --no-fund',
+    lint: 'npm run typecheck',
+    test: 'npm test',
+    build: '',
+  },
+});
+```
+
+こうすると **executor のパイプライン自身が検証する**（結果は `result.steps` に残る）。
+プロンプトに「自分で npm test を走らせて」と書く必要はない。`skipChecks` は
+「検証を意図的に飛ばす」ときだけ使う。
 
 ### 別のリポジトリを対象にする
 
 ```bash
-./cli/remote-claude.mjs run "..." --base main   # 既定は REPO_URL
+./cli/remote-claude.mjs run "..." --base main   # 既定は REPO_URL、commands も deployment のもの
 ```
 
-CLI は `repo` を渡す口を持っていない。別 repo に投げるなら SDK か HTTP を使う:
-
-```ts
-import { createClient } from '@r-hashi01/remote-claude-client';  // または sdk/dist を直接
-const rc = createClient({ url, token });
-const job = await rc.startJob({ prompt, repo: 'https://github.com/acme/app.git', skipChecks: true });
-```
+CLI は `repo` も `commands` も渡す口を持っていない。別 repo に投げるなら SDK か HTTP を使う
+（上の例）。
 
 **GitHub App installation が到達できる repo に限る**（ADR 0010）。届かなければ受付時に
-400 で拒否され、cloneまで待たない。
+400 で拒否され、cloneまで待たない。届いていない場合のメッセージには installation ID と
+追加する場所が入っている。
 
 ## 4. 追う
 
@@ -127,7 +150,8 @@ executor のエラー文は原因を指すように書かれている。**言い
 | 出た文言 | 意味 | 対処 |
 |---|---|---|
 | `runner stopped responding during "<phase>"` + `runner output:` | コンテナ内の runner が死んだ。直後の runner output が理由 | output を読む。OOM なら分割して投げ直す |
-| `no output for N minutes during "<phase>"; presumed stuck` | 生きているが何も出していない | 長い install などが原因。`--skip-checks` を確認 |
+| `no output for N minutes during "<phase>"; presumed stuck` | 生きているが何も出していない | 長い install などが原因 |
+| `step "install" failed with exit code 1` | deployment の install コマンドが対象 repo に合っていない | 上記のとおり `commands.install` を渡す |
 | `job exceeded <n>ms` | 全体 timeout | 作業を分割する |
 | `this executor is pinned to <A> and will not run against <B>` | **executor 側の設定**（`ALLOW_CUSTOM_REPO=false`） | 呼び出し側のバグではない。deployment の設定を直すか、対象を変える |
 | `installation cannot reach <owner/name>` | GitHub App installation にその repo が入っていない | GitHub → Settings → Applications → Configure → Repository access |

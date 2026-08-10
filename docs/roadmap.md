@@ -104,17 +104,18 @@ ACP レイヤーは実装済みだがジョブ経路に繋がっていない。*
 実際にジョブを完走させること。ユニットテストは
 `src/application/job-service.test.ts` が覆っている（許可・拒否・到達不可・同一repoの別表記）。
 
-### RC-14. install / lint / test コマンドを repo ごとに決める
+### ~~RC-14. install / lint / test コマンドを repo ごとに決める~~ → 対応済み
 
-**観測**: `INSTALL_COMMAND` / `LINT_COMMAND` は **deployment 単位**の設定で、いまは
-spindle 用の値（`npm --prefix packages/spindle-core ci ...`）が入っている。
-`ALLOW_CUSTOM_REPO` を開けた（ADR 0010）ことで、**pinned repo 以外に投げると install step が
-存在しないパスを叩いて失敗する**という形で表に出た。remote-claude 自身に投げるには
-`--skip-checks` が必須になっている（`.claude/skills/delegate/SKILL.md` にその旨を書いた）。
+**観測**: 最初の dogfood ジョブ（remote-claude 自身を対象）が install step で落ちた。
+走ったのは spindle 用の `npm --prefix packages/spindle-core ci ...`。
+**`skipChecks` は lint/test/build にしか効かず、install は必ず走る**ため回避策が無く、
+`ALLOW_CUSTOM_REPO` を開けた（ADR 0010）ことは「別 repo を受け付けるが必ず失敗する」
+状態を作っていた。**設定の単位が deployment なのに対象の単位が job になっている**のが
+食い違いの本体で、それはこの1本を投げるまで「不便」だと思われていた。
 
-**やること**: ジョブのオプションで上書きできるようにするか、repo 側の
-`package.json` / `AGENTS.md` から決めるか。**設定の単位が deployment なのに、
-対象の単位が job になっている**のが食い違いの本体。
+**やったこと**: `JobRequest.commands` で job ごとに上書きできるようにした。
+指定しなかったキーは deployment の値を継ぎ、空文字は「skip」という指示として通る。
+これで executor のパイプライン自身が対象 repo を検証できる（`result.steps` に残る）。
 
 ### RC-10. Workspace cache を配線するか、消す
 

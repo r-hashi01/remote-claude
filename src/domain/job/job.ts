@@ -1,6 +1,13 @@
 import { branchForJob, sanitizeRef } from './branch';
 import { normalisePrompt } from './prompt';
-import type { JobOptions, JobRecord, JobResult, JobSummary, JobUsage } from './record';
+import type {
+  JobCommands,
+  JobOptions,
+  JobRecord,
+  JobResult,
+  JobSummary,
+  JobUsage,
+} from './record';
 import { isTerminalStatus, type JobStatus } from './status';
 
 export interface CreateJobInput {
@@ -12,6 +19,8 @@ export interface CreateJobInput {
   /** Work on this branch instead of the generated one. */
   branch?: string;
   options?: Partial<JobOptions>;
+  /** Commands to run instead of the deployment's. Unspecified keys inherit. */
+  commands?: Partial<JobCommands>;
   now: number;
 }
 
@@ -54,6 +63,7 @@ export class Job {
         keepSandbox: input.options?.keepSandbox === true,
         push: input.options?.push === true,
       },
+      commands: definedOnly(input.commands),
     });
   }
 
@@ -105,6 +115,11 @@ export class Job {
 
   get options(): JobOptions {
     return this.record.options;
+  }
+
+  /** What this job runs instead of the deployment's commands. */
+  get commandOverrides(): Partial<JobCommands> {
+    return this.record.commands ?? {};
   }
 
   get isTerminal(): boolean {
@@ -188,6 +203,16 @@ export class Job {
    * Several paths can arrive here at once — a cancellation racing a finished
    * runner, a poll racing the sweep — and the first outcome is the true one.
    */
+  /**
+   * The commands this job will actually run.
+   *
+   * The deployment's, with this job's overrides on top. An empty override wins
+   * over a configured command, because empty means skip.
+   */
+  resolveCommands(configured: JobCommands): JobCommands {
+    return { ...configured, ...this.commandOverrides };
+  }
+
   settle(status: JobStatus, now: number, details: SettleDetails = {}): boolean {
     if (this.isTerminal) return false;
     this.record.status = status;
@@ -196,4 +221,15 @@ export class Job {
     if (details.result) this.record.result = details.result;
     return true;
   }
+}
+
+/**
+ * Keep only the keys that were actually given a value.
+ *
+ * `{ lint: undefined }` is not an instruction to skip lint — it is a key the
+ * caller happened to mention. Empty strings survive: those *are* an instruction.
+ */
+function definedOnly(commands: Partial<JobCommands> | undefined): Partial<JobCommands> {
+  const given = Object.entries(commands ?? {}).filter(([, value]) => value !== undefined);
+  return Object.fromEntries(given) as Partial<JobCommands>;
 }

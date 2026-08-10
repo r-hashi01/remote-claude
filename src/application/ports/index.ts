@@ -1,5 +1,5 @@
 import type { Job } from '../../domain/job/job';
-import type { JobStatus, LogLine, LogStream } from '../../domain/job/record';
+import type { JobCommands, JobStatus, LogLine, LogStream } from '../../domain/job/record';
 import type { SandboxLedgerEntry } from '../../domain/sandbox/ledger';
 
 /**
@@ -121,10 +121,6 @@ export interface ExecutorPolicy {
   /** How long a job's record and logs are kept. */
   retentionMs: number;
   sleepAfter: string;
-  commands: {
-    install: string;
-    lint: string;
-    test: string;
-    build: string;
-  };
+  /** The deployment's defaults. A job may override them per key. */
+  commands: JobCommands;
 }
