@@ -175,7 +175,42 @@ provider への呼び出しを数えたときに出てきた。
 
 **残り**: RC-7（ジョブ経路との接続）。これはセッションの構造ではなく製品としての判断。
 
+### 同じ型の欠陥を洗う（2026-08-11 実施）
+
+委譲を回して出た3つの欠陥（RC-14 / 環境変数の3重複製 / SDK が一過性 500 で死ぬ）は、
+それぞれ**一般形**を持っていた。個別に直して終わりにせず、同じ型でリポジトリ全体を洗った結果。
+
+**型1: 設定できるが、効く範囲が思っているものと違う**
+
+- `skipChecks` が install に効かない → RC-14（対応済み）
+- `ALLOW_PUSH` が読まれるだけで参照されない → 対応済み
+- workspace cache 系が一度も呼ばれない → RC-10（未決）。
+  `BACKUP_BUCKET_NAME` と `CLOUDFLARE_ACCOUNT_ID` も `Env` にあるが誰も読まない。同じ決定に属する
+- `SANDBOX_TRANSPORT` は誰も読んでいないように見えたが、**Sandbox SDK が読んでいた**（誤検知）
+- `max_instances` (3) と `MAX_CONCURRENCY` (3) は一致している ✅
+
+**型2: 同じ規則が複数箇所にあり、片方だけ穴が開く**
+
+- claude プロセスの環境変数が3箇所 → `/health/auth` だけ `ANTHROPIC_BASE_URL` の穴（対応済み）
+- **redactor の秘密リストが3箇所 → ACP セッションのものだけ R2 の鍵2つを欠いていた**（対応済み）。
+  `Secrets` interface + `satisfies Record<keyof Secrets, true>` にしたので、
+  **秘密を1つ足して masking を忘れるとコンパイルが通らない**
+- `REPO_DIR` が application 層に2箇所 → `application/workspace.ts` に統合（対応済み）
+
+**型3: クライアントが一過性の失敗で死ぬ**
+
+- SDK の `waitForJob` → 対応済み
+- **`cli/remote-claude.mjs` の follow も同じ欠陥だった**（しかも `remote-claude run` の既定経路）→ 対応済み
+- `cli/acp-bridge.mjs` は**最初から正しく再接続していた** ✅。同じリポジトリの中に正解の先例があった
+
+**次にこの洗い方をするときの起点**: 「この設定を変えたら、本当に挙動が変わるか」
+「この規則は何箇所に書かれているか」「この待ち受けは、相手が1秒消えたら死ぬか」。
+
 ### RC-12. CLI と dashboard を SDK に載せ替える
+
+**追加の理由**: CLI が一過性エラーの再試行を持つようになり、**SDK と同じ規則が2箇所になった**
+（型2 そのもの）。CLI が `sdk/dist` を import できないのは依存ゼロを保っているためで、
+RC-9（publish）が入れば解ける。
 
 **観測**: `sdk/` を出した目的は「利用者がHTTPを手書きしない」ことだが、
 **このリポジトリ自身の CLI (`cli/remote-claude.mjs`) と dashboard が独自の fetch を持っている。**

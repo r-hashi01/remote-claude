@@ -18,9 +18,9 @@ import type {
   SessionStore,
   UpdateSink,
 } from './ports';
+import { REPO_DIR } from './workspace';
 
-/** Where the interactive session clones its working tree. Contract with the sandbox image. */
-export const REPO_DIR = '/workspace/repo';
+
 
 export interface AgentSessionDeps {
   /** Uses repoUrl / defaultBaseBranch / allowCustomRepo / claudeTimeoutMs / sleepAfter. */

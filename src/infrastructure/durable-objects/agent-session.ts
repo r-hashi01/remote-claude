@@ -5,6 +5,7 @@ import { claudeProcessEnvironment } from '../../domain/agent/environment';
 import { createRedactor } from '../../domain/redaction/redactor';
 import { loadConfig } from '../config';
 import type { Env } from '../env';
+import { maskedSecrets } from '../secrets';
 import { GitHubAppAccess } from '../github/app';
 import { getSandboxProvider } from '../sandbox';
 
@@ -62,7 +63,7 @@ export class AgentSession extends DurableObject<Env> implements SessionStore, Up
       session: this,
       updates: this,
       github: new GitHubAppAccess(env),
-      redact: createRedactor([env.CLAUDE_CODE_OAUTH_TOKEN, env.GITHUB_APP_PRIVATE_KEY, env.REMOTE_CLAUDE_TOKEN]),
+      redact: createRedactor(maskedSecrets(env)),
       background: this,
       claudeEnvironment: () =>
         claudeProcessEnvironment({

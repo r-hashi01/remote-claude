@@ -15,6 +15,7 @@ import {
   SqliteLogStore,
 } from '../persistence/sqlite-stores';
 import { RunningJobRegistry } from '../running-jobs';
+import { maskedSecrets } from '../secrets';
 import { RUNNER_SOURCE } from '../runner-source';
 import { getSandboxProvider } from '../sandbox';
 
@@ -57,13 +58,7 @@ export class JobManager extends DurableObject<Env> {
         },
       },
       running: this.running,
-      redact: createRedactor([
-        env.CLAUDE_CODE_OAUTH_TOKEN,
-        env.GITHUB_APP_PRIVATE_KEY,
-        env.REMOTE_CLAUDE_TOKEN,
-        env.R2_ACCESS_KEY_ID,
-        env.R2_SECRET_ACCESS_KEY,
-      ]),
+      redact: createRedactor(maskedSecrets(env)),
       runnerSource: RUNNER_SOURCE,
       containerEnvironment: () =>
         claudeProcessEnvironment({

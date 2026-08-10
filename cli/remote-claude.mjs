@@ -101,7 +101,37 @@ function loadConfig() {
 
 // ------------------------------------------------------------------ http
 
-async function api(config, path, { method = 'GET', body, raw = false } = {}) {
+/**
+ * How many polls in a row may fail transiently before giving up.
+ *
+ * Deploying the worker resets the Durable Object that coordinates jobs, and the
+ * next request answers 500 "Durable Object reset because its code was updated".
+ * The job is unaffected — it runs in a container — so dying here reported a
+ * healthy job as a failure. The SDK had the same hole; this is the same fix.
+ *
+ * And it is now the same rule in two places, which is the other recurring defect
+ * in this repository. It stays that way only until this CLI is built on the SDK
+ * (roadmap RC-12); it cannot import it today because the CLI is dependency-free
+ * and `sdk/dist` is a build artifact.
+ */
+const TRANSIENT_RETRIES = 5;
+
+async function api(config, path, { method = 'GET', body, raw = false, retries = 0 } = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    const outcome = await request(config, path, { method, body, raw });
+    if (outcome.ok) return outcome.value;
+
+    // A rejected token or a missing job will answer the same way forever; only
+    // server-side and transport failures are worth asking again.
+    const worthRetrying = outcome.transient && attempt < retries;
+    if (!worthRetrying) fail(outcome.message);
+
+    process.stderr.write(`· ${outcome.message} — retrying (${attempt + 1}/${retries})\n`);
+    await sleep(1000);
+  }
+}
+
+async function request(config, path, { method, body, raw }) {
   let response;
   try {
     response = await fetch(`${config.url}${path}`, {
@@ -113,21 +143,27 @@ async function api(config, path, { method = 'GET', body, raw = false } = {}) {
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (error) {
-    fail(`cannot reach ${config.url}: ${error.message}`);
+    return { ok: false, transient: true, message: `cannot reach ${config.url}: ${error.message}` };
   }
 
-  if (response.status === 401) fail('unauthorized — REMOTE_CLAUDE_TOKEN does not match the worker');
-  if (response.status === 404) fail('not found');
+  if (response.status === 401) {
+    return { ok: false, message: 'unauthorized — REMOTE_CLAUDE_TOKEN does not match the worker' };
+  }
+  if (response.status === 404) return { ok: false, message: 'not found' };
+
+  const transient = response.status >= 500 || response.status === 429;
 
   if (raw) {
     const text = await response.text();
-    if (!response.ok) fail(text || `HTTP ${response.status}`);
-    return text;
+    if (!response.ok) return { ok: false, transient, message: text || `HTTP ${response.status}` };
+    return { ok: true, value: text };
   }
 
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) fail(payload.error || `HTTP ${response.status}`);
-  return payload;
+  if (!response.ok) {
+    return { ok: false, transient, message: payload.error || `HTTP ${response.status}` };
+  }
+  return { ok: true, value: payload };
 }
 
 // -------------------------------------------------------------- commands
@@ -173,7 +209,9 @@ async function cmdRun(config, args) {
 async function follow(config, id, echo) {
   let since = 0;
   for (;;) {
-    const { logs, nextSince } = await api(config, `/jobs/${id}/logs?since=${since}`);
+    const { logs, nextSince } = await api(config, `/jobs/${id}/logs?since=${since}`, {
+      retries: TRANSIENT_RETRIES,
+    });
     since = nextSince ?? since;
     if (echo) {
       for (const entry of logs) {
@@ -182,10 +220,12 @@ async function follow(config, id, echo) {
       }
     }
 
-    const task = await api(config, `/jobs/${id}`);
+    const task = await api(config, `/jobs/${id}`, { retries: TRANSIENT_RETRIES });
     if (TERMINAL.has(task.status)) {
       // Drain anything written between the two calls.
-      const tail = await api(config, `/jobs/${id}/logs?since=${since}`);
+      const tail = await api(config, `/jobs/${id}/logs?since=${since}`, {
+        retries: TRANSIENT_RETRIES,
+      });
       if (echo) for (const entry of tail.logs) process.stdout.write('  ' + entry.line + '\n');
       return task;
     }
