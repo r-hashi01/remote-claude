@@ -1,5 +1,6 @@
 import { createRedactor } from './domain/redaction/redactor';
 import type { Env } from './infrastructure/env';
+import { maskedSecrets } from './infrastructure/secrets';
 import { route } from './interface/http/router';
 
 /**
@@ -27,13 +28,7 @@ export { ContainerProxy } from '@cloudflare/sandbox';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const redact = createRedactor([
-      env.CLAUDE_CODE_OAUTH_TOKEN,
-      env.GITHUB_APP_PRIVATE_KEY,
-      env.REMOTE_CLAUDE_TOKEN,
-      env.R2_ACCESS_KEY_ID,
-      env.R2_SECRET_ACCESS_KEY,
-    ]);
+    const redact = createRedactor(maskedSecrets(env));
 
     try {
       return await route(request, env);

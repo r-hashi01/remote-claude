@@ -10,7 +10,31 @@ import type { Sandbox } from './durable-objects/sandbox';
  * it. Those layers state what they need as ports; this is where the platform
  * supplies it.
  */
-export interface Env {
+/**
+ * The values that must never appear in output.
+ *
+ * Declared separately from `Env` so that every place which masks secrets can be
+ * checked against this list at compile time — see `maskedSecrets`. Adding a
+ * credential here and nowhere else is a type error, which is the only reliable
+ * way to keep three redactors in agreement: one of them was already missing two
+ * of these.
+ *
+ * `GITHUB_APP_ID` and `GITHUB_APP_INSTALLATION_ID` are deliberately absent.
+ * They are short numeric identifiers rather than credentials, and masking them
+ * would corrupt unrelated output while protecting nothing.
+ */
+export interface Secrets {
+  /** Long-lived Claude subscription OAuth token from `claude setup-token`. */
+  CLAUDE_CODE_OAUTH_TOKEN?: string;
+  /** Shared bearer token guarding this Worker's API. */
+  REMOTE_CLAUDE_TOKEN?: string;
+  /** GitHub App private key (PEM, PKCS#8 — see README). */
+  GITHUB_APP_PRIVATE_KEY?: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
+}
+
+export interface Env extends Secrets {
   // --- Durable Object / container bindings ---
   Sandbox: DurableObjectNamespace<Sandbox>;
   JOBS: DurableObjectNamespace<JobManager>;
@@ -24,18 +48,11 @@ export interface Env {
   BACKUP_BUCKET?: R2Bucket;
 
   // --- Secrets (wrangler secret put / .dev.vars) ---
-  /** Long-lived Claude subscription OAuth token from `claude setup-token`. */
-  CLAUDE_CODE_OAUTH_TOKEN?: string;
-  /** Shared bearer token guarding this Worker's API. */
-  REMOTE_CLAUDE_TOKEN?: string;
-  /** GitHub App ID. Used with the two fields below to mint short-lived installation tokens for clone/push. */
+  // The maskable ones are in `Secrets` above.
+  /** GitHub App ID. Used with the private key to mint installation tokens. */
   GITHUB_APP_ID?: string;
-  /** GitHub App private key (PEM, PKCS#8 — see README). */
-  GITHUB_APP_PRIVATE_KEY?: string;
   /** Installation ID of the App on the target repo/org. */
   GITHUB_APP_INSTALLATION_ID?: string;
-  R2_ACCESS_KEY_ID?: string;
-  R2_SECRET_ACCESS_KEY?: string;
 
   // --- Vars ---
   /** Which SandboxProvider implementation to use. Defaults to "cloudflare". */

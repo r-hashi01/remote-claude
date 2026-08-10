@@ -30,10 +30,11 @@ import type {
   SandboxSession,
   Scheduler,
 } from './ports';
+import { REPO_DIR, STATE_DIR } from './workspace';
 
-/** Where the container runner keeps its state files. Contract with runner.mjs. */
-export const STATE_DIR = '/workspace/.remote-claude';
-export const REPO_DIR = '/workspace/repo';
+// Re-exported because these are part of this module's story (the runner contract
+// lives here) while the values themselves are shared with the session path.
+export { REPO_DIR, STATE_DIR } from './workspace';
 
 /** How often to mirror a running job's state files into this executor. */
 export const POLL_INTERVAL_MS = 2_000;
