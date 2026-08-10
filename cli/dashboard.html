@@ -129,6 +129,7 @@
   code { font-family: var(--mono); font-size: 12px; background: var(--code); padding: 1px 4px; border-radius: 3px; }
   .err { color: var(--bad); white-space: pre-wrap; margin-bottom: 14px; font-size: 13px; }
   .final { border-left: 2px solid var(--accent); padding-left: 11px; margin: 0 0 16px; white-space: pre-wrap; }
+  .pr-link { margin: 0 0 16px; font-size: 13px; }
   a, .linkish { color: var(--accent); }
   .linkish { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; text-decoration: underline; }
   pre.diff {
@@ -277,6 +278,9 @@
     html += '<div class="prompt-full">' + esc(job.prompt) + "</div>";
     html += statBlock(job);
     if (job.finalText) html += '<div class="final">' + esc(job.finalText) + "</div>";
+    if (job.pullRequestUrl) {
+      html += '<div class="pr-link"><a href="' + esc(job.pullRequestUrl) + '" target="_blank">pull request →</a></div>';
+    }
     if (job.result && job.result.diffStat) {
       html += '<div class="prompt-full" style="max-height:none">' + esc(job.result.diffStat) + "</div>";
     }
