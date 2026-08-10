@@ -9,6 +9,19 @@
 （プロンプトを1本実行して diff を返す）だけで、Project や仕事の継続的な状態は扱わない。
 それは呼び出し側（spindle）の責務 — ADR 0003。
 
+## ジョブの結果を見る
+
+投げた本人以外には何が起きたか見えない、というのは情報が無いからではなく、
+見に行く場所が書かれていないだけ。
+
+- `remote-claude status <job-id>` — status・usage・コスト・diffstat・lint/test の結果・
+  agent の締めの発言
+- `remote-claude diff <job-id>` — 差分そのもの
+- `remote-claude logs <job-id>` — 全ログ（`-f` で追尾）
+- `remote-claude ui` — ローカルのダッシュボード。**トークンを持つマシンからしか開けない**
+
+agent の締めの発言は要約であって監査ではない。実際に何が変わったかは diff にしかない。
+
 ## 層（これを壊さないこと）
 
 依存の矢印は**内向きだけ**。ADR 0008。
