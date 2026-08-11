@@ -85,11 +85,65 @@ function log(stream, line) {
   );
 }
 
+// ---------------------------------------------------------------- memory
+
+/**
+ * How much of the container's memory allowance is in use.
+ *
+ * A runner that is killed for using too much cannot report it afterwards: the
+ * process is gone, the platform stops holding a record of it, and the Worker
+ * sees only silence — which is indistinguishable from the container itself being
+ * taken away, and wants the opposite response. So the trail has to be laid down
+ * beforehand.
+ *
+ * The cgroup is the only honest source here. `os.totalmem()` reports the host's
+ * memory inside a container, which is a number roughly eight times too large and
+ * far more misleading than having none.
+ */
+function memoryUse() {
+  try {
+    const limit = readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim();
+    const used = Number(readFileSync('/sys/fs/cgroup/memory.current', 'utf8').trim());
+    if (limit === 'max' || !Number.isFinite(used)) return null;
+    return { usedMb: Math.round(used / 1e6), limitMb: Math.round(Number(limit) / 1e6) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The highest tenth of the allowance already reported.
+ *
+ * Logged in bands so a healthy job says nothing and a dying one leaves a ladder
+ * ending at the last rung it reached — enough to tell "killed for its memory"
+ * from "the platform reclaimed the container" without a byte of noise in between.
+ */
+let reportedBand = 0.6;
+
+function noticeMemory() {
+  const use = memoryUse();
+  if (!use || !use.limitMb) return use;
+  const share = use.usedMb / use.limitMb;
+  if (share <= reportedBand + 0.1) return use;
+  reportedBand = Math.floor(share * 10) / 10;
+  log(
+    'system',
+    `⚠ memory ${use.usedMb}MB of ${use.limitMb}MB (${Math.round(share * 100)}%) during "${currentPhase}"`
+  );
+  return use;
+}
+
 let currentPhase = 'starting';
 let currentExtra = {};
 
 function writeStatus() {
-  write('status.json', { phase: currentPhase, seq: logSeq, updatedAt: Date.now(), ...currentExtra });
+  write('status.json', {
+    phase: currentPhase,
+    seq: logSeq,
+    updatedAt: Date.now(),
+    memory: noticeMemory() ?? undefined,
+    ...currentExtra,
+  });
 }
 
 function setStatus(phase, extra = {}) {

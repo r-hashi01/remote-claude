@@ -560,6 +560,60 @@ describe('following a running job', () => {
     expect(job?.error).not.toMatch(/startup/);
   });
 
+  // A killed process and a replaced container look identical from the outside —
+  // both leave a runner the platform has no record of — and they want opposite
+  // responses. What separates them is whether the container's filesystem is
+  // still there, so the failure says which one it found.
+  test('says whether the status file went stale or went away', async () => {
+    const stale = await started();
+    const staleSandbox = stale.sandboxes.get(`rc-${stale.jobId}`);
+    staleSandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({ phase: 'running', updatedAt: stale.clock.now() })
+    );
+    await stale.service.tick();
+    staleSandbox.processes.delete(`runner-${stale.jobId}`);
+    stale.clock.advance(stale.deps.policy.heartbeatTimeoutMs + 1_000);
+    await stale.service.tick();
+
+    expect(stale.jobs.load(stale.jobId)?.error).toMatch(/status file .*stale/i);
+
+    const gone = await started();
+    const goneSandbox = gone.sandboxes.get(`rc-${gone.jobId}`);
+    goneSandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({ phase: 'running', updatedAt: gone.clock.now() })
+    );
+    await gone.service.tick();
+    goneSandbox.processes.delete(`runner-${gone.jobId}`);
+    goneSandbox.files.delete(`${STATE_DIR}/status.json`);
+    gone.clock.advance(gone.deps.policy.heartbeatTimeoutMs + 1_000);
+    await gone.service.tick();
+
+    expect(gone.jobs.load(gone.jobId)?.error).toMatch(/status file .*gone/i);
+  });
+
+  // The reason a runner is killed for its memory is legible only from before it
+  // died, so the last reading it managed to write travels with the failure.
+  test('reports the memory the runner last recorded', async () => {
+    const h = await started();
+    const sandbox = h.sandboxes.get(`rc-${h.jobId}`);
+    sandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({
+        phase: 'running',
+        updatedAt: h.clock.now(),
+        memory: { usedMb: 980, limitMb: 1024 },
+      })
+    );
+    await h.service.tick();
+    sandbox.processes.delete(`runner-${h.jobId}`);
+    h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
+    await h.service.tick();
+
+    expect(h.jobs.load(h.jobId)?.error).toMatch(/980MB of 1024MB/);
+  });
+
   // "It never started" was printed for a job that had run a 24 second install.
   // A claim contradicted by the log above it costs the reader the time it takes
   // to work out which half to believe.

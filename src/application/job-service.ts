@@ -70,6 +70,19 @@ export function runnerProcessId(jobId: string): string {
 /** How much of the runner's own output to quote when it dies. */
 const RUNNER_OUTPUT_TAIL = 2_000;
 
+/**
+ * What the runner writes to say where it is.
+ *
+ * Read every poll and deliberately not trusted as liveness on its own: the file
+ * can be unreadable for a moment while the job it describes is working fine.
+ */
+interface RunnerStatus {
+  phase?: 'completed' | 'failed' | string;
+  updatedAt?: number;
+  /** The runner's own view of its memory allowance, when the cgroup exposes one. */
+  memory?: { usedMb: number; limitMb: number };
+}
+
 /** What a follow-up turn may say for itself. Everything else is inherited. */
 export interface ContinueRequest {
   prompt: string;
@@ -620,18 +633,20 @@ export class JobService {
         lookupInterrupted = isTransientPlatformError(message);
       }
 
+      // Whether the runner ever got going, asked of what the job remembers rather
+      // than of what can be read this second. Read freshly, a job whose container
+      // had just been taken away looked like a runner that never started — the
+      // same mistake as judging liveness from a single unreadable status file, in
+      // the rule right next to it.
+      const reportedStatus = status !== undefined || fresh.phase !== undefined;
+      const producedOutput = fresh.logSeq > 0;
+
       // A runner that wrote no status and printed nothing executed nothing, so
       // this is still the pre-runner window and a retry has no side effects.
       if (
         shouldRetrySilentStartup({
-          // "Has it ever reported one", not "can one be read right now". Read
-          // freshly, a job whose container had just been taken away looked like a
-          // runner that never started — the same mistake as judging liveness from
-          // a single unreadable status file, in the rule right next to it.
-          runnerReportedStatus: status !== undefined || fresh.phase !== undefined,
-          // Anything mirrored means the runner ran. This is read from the job
-          // rather than inferred from files that may be momentarily unreadable.
-          producedOutput: fresh.logSeq > 0,
+          runnerReportedStatus: reportedStatus,
+          producedOutput,
           runnerOutput: output,
           attemptsSoFar: fresh.attempts,
         })
@@ -672,8 +687,9 @@ export class JobService {
         ? `\nrunner output:\n${output.slice(-RUNNER_OUTPUT_TAIL)}`
         : runner !== null
           ? ' The runner process is still there and has printed nothing at all.'
-          : fresh.logSeq > 0
-            ? ' The platform is no longer holding the runner process, so it is gone rather than stuck.'
+          : reportedStatus || producedOutput
+            ? ' The platform is no longer holding the runner process, so it is gone' +
+              ` rather than stuck, and its ${describeStatusFile(status, clock.now())}.`
             : ' The platform has no record of the runner process, so it never started.';
 
       await this.stopContainer(jobId);
@@ -683,9 +699,7 @@ export class JobService {
 
   private async readStatus(
     sandbox: SandboxSession,
-  ): Promise<
-    { phase?: 'completed' | 'failed' | string; updatedAt?: number } | undefined
-  > {
+  ): Promise<RunnerStatus | undefined> {
     const raw = await sandbox.readFile(`${STATE_DIR}/status.json`);
     return raw
       ? (JSON.parse(raw) as { phase?: string; updatedAt?: number })
@@ -1096,4 +1110,35 @@ export class JobService {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * What the runner's status file says about how its process died.
+ *
+ * A process the platform killed and a container instance that was replaced both
+ * present as a runner with no record, and they call for opposite responses — one
+ * is this job's own fault (its own memory, most likely), the other is nobody's.
+ * The container's filesystem is what tells them apart: still there holding a
+ * stale file, or gone with everything in it.
+ */
+function describeStatusFile(
+  status: RunnerStatus | undefined,
+  now: number,
+): string {
+  if (status === undefined) {
+    return 'status file is gone, so the container went with it';
+  }
+  const age =
+    status.updatedAt === undefined
+      ? 'unknown'
+      : `${Math.round((now - status.updatedAt) / 1_000)}s`;
+  // The last reading before it died — the difference between a runner killed for
+  // its memory and one that simply stopped, which nothing after the fact can say.
+  const memory = status.memory
+    ? `, last using ${status.memory.usedMb}MB of ${status.memory.limitMb}MB`
+    : '';
+  return (
+    `status file is still there and ${age} stale${memory}, ` +
+    'so the container outlived it'
+  );
 }
