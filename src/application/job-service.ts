@@ -5,7 +5,7 @@ import {
   type ClaudeStreamEvent,
 } from '../domain/agent/acp';
 import { assessRunnerHealth, exceededDeadline } from '../domain/job/health';
-import { Refusal } from '../domain/job/errors';
+import { NotFound, Refusal } from '../domain/job/errors';
 import { Job } from '../domain/job/job';
 import type {
   JobCommands,
@@ -226,7 +226,7 @@ export class JobService {
     const { jobs, clock, ids, scheduler } = this.deps;
 
     const previous = jobs.load(previousId);
-    if (!previous) throw new Refusal(`job ${previousId} is not one this executor knows about`);
+    if (!previous) throw new NotFound(`job ${previousId} is not one this executor knows about`);
 
     const job = Job.continuing(previous, {
       id: ids.next(),

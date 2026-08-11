@@ -742,9 +742,14 @@ describe('continuing a job', () => {
     expect(written.resumeSession).toBeUndefined();
   });
 
-  test('refuses to continue a job it does not know', async () => {
+  // Not a refusal: "no such job" is a different answer from "bad request", and
+  // the HTTP layer turns this one into a 404 to match every other endpoint.
+  test('an unknown job is not found rather than refused', async () => {
     const { service } = harness();
-    await expect(service.continueJob('nope', { prompt: 'x' })).rejects.toThrow(/not one this executor knows/);
+    await expect(service.continueJob('nope', { prompt: 'x' })).rejects.toMatchObject({
+      name: 'NotFound',
+      message: expect.stringContaining('not one this executor knows'),
+    });
   });
 
   test('refuses to continue a job that is still running', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { Refusal } from '../../domain/job/errors';
+import { NotFound, Refusal } from '../../domain/job/errors';
 import { toErrorResponse } from './errors';
 
 const plain = (input: string) => input;
@@ -12,6 +12,16 @@ describe('toErrorResponse', () => {
 
     expect(answer.status).toBe(400);
     await expect(answer.json()).resolves.toEqual({ error: 'this executor kept no workspace' });
+  });
+
+  // "not like that" and "not here" are different answers. Continuing a job that
+  // does not exist used to give 400 while fetching the same job gave 404, so a
+  // caller could not tell them apart.
+  test('something that is not there is 404', async () => {
+    const answer = toErrorResponse(new NotFound('job nope is not one this executor knows about'), plain);
+
+    expect(answer.status).toBe(404);
+    await expect(answer.json()).resolves.toMatchObject({ error: expect.stringContaining('nope') });
   });
 
   test('anything else is ours', async () => {
