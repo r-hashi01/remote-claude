@@ -403,6 +403,41 @@ describe('following a running job', () => {
     expect(sandbox.destroyed).toBe(true);
   });
 
+  // The runner sends its steps even when it fails; the executor used to keep only
+  // the error line, so the one case that needs diagnosis had the least of it.
+  test('a failed job keeps the steps that ran', async () => {
+    const h = await started();
+    const sandbox = h.sandboxes.get(`rc-${h.jobId}`);
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'failed', updatedAt: h.clock.now() }));
+    sandbox.files.set(
+      `${STATE_DIR}/result.json`,
+      JSON.stringify({
+        error: 'step "install" failed with exit code 1',
+        claudeOutput: '',
+        changed: false,
+        branch: 'claude/x',
+        pushed: false,
+        gitStatus: '',
+        diffStat: '',
+        diffBytes: 0,
+        steps: [
+          { name: 'verify-no-api-key', command: 'printenv …', exitCode: 0, success: true, durationMs: 12, output: '' },
+          { name: 'install', command: 'npm --prefix packages/spindle-core ci', exitCode: 1, success: false, durationMs: 874, output: 'npm error code EUSAGE' },
+        ],
+      })
+    );
+
+    await h.service.tick();
+
+    const job = h.jobs.load(h.jobId)?.toRecord();
+    expect(job?.status).toBe('failed');
+    expect(job?.error).toMatch(/step "install" failed/);
+    // Which command ran, and what it printed — the reason to look at a failure.
+    expect(job?.result?.steps.map((step) => step.name)).toEqual(['verify-no-api-key', 'install']);
+    expect(job?.result?.steps[1]?.command).toMatch(/npm --prefix/);
+    expect(job?.result?.steps[1]?.output).toMatch(/EUSAGE/);
+  });
+
   test('a job asked to keep its sandbox keeps it', async () => {
     const h = harness();
     const job = await h.service.createJob({ prompt: 'x', keepSandbox: true });
