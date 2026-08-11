@@ -633,6 +633,14 @@ export class JobService {
         lookupInterrupted = isTransientPlatformError(message);
       }
 
+      // Whether the container is still the one this job was launched into. The
+      // executor wrote this file itself, before anything ran, so its absence is
+      // not something the runner could have caused — and it is the only trace a
+      // replaced instance leaves, since a sandbox addressed by id quietly hands
+      // back a fresh empty one and every call keeps succeeding.
+      const stateDirectoryEmptied =
+        (await sandbox.readFile(`${STATE_DIR}/runner.mjs`)) === null;
+
       // Whether the runner ever got going, asked of what the job remembers rather
       // than of what can be read this second. Read freshly, a job whose container
       // had just been taken away looked like a runner that never started — the
@@ -665,6 +673,7 @@ export class JobService {
       if (
         shouldRetryLostContainer({
           platformInterrupted: platformInterrupted || lookupInterrupted,
+          stateDirectoryEmptied,
           runnerProcessMissing: runner === null,
           lastKnownPhase: status?.phase ?? fresh.phase,
           attemptsSoFar: fresh.attempts,
@@ -673,7 +682,9 @@ export class JobService {
         await this.requeueForRetry(
           jobId,
           fresh.attempts + 1,
-          'the platform took the container away mid-run',
+          stateDirectoryEmptied
+            ? 'the container was replaced under this job'
+            : 'the platform took the container away mid-run',
         );
         return;
       }

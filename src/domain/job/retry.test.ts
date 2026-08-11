@@ -92,6 +92,7 @@ describe('shouldRetrySilentStartup', () => {
 describe('shouldRetryLostContainer', () => {
   const base = {
     platformInterrupted: true,
+    stateDirectoryEmptied: false,
     runnerProcessMissing: true,
     lastKnownPhase: 'running',
     attemptsSoFar: 0,
@@ -101,6 +102,23 @@ describe('shouldRetryLostContainer', () => {
     expect(shouldRetryLostContainer(base)).toBe(true);
   });
 
+  /**
+   * The signature that got past the first version of this rule. A sandbox is
+   * addressed by id, so when the instance behind it is gone the next call quietly
+   * gets a new empty one — every operation succeeds, no error is raised, and the
+   * files the executor itself wrote are simply not there. Requiring a platform
+   * error to have been seen missed the case that leaves no error at all.
+   */
+  test('retries when the container has lost files the executor wrote', () => {
+    expect(
+      shouldRetryLostContainer({
+        ...base,
+        platformInterrupted: false,
+        stateDirectoryEmptied: true,
+      })
+    ).toBe(true);
+  });
+
   // The whole point is that the container is gone, so nothing survived to be
   // half-done. A runner the platform is still holding is a different failure and
   // re-running the prompt would not be a retry of anything.
@@ -108,8 +126,10 @@ describe('shouldRetryLostContainer', () => {
     expect(shouldRetryLostContainer({ ...base, runnerProcessMissing: false })).toBe(false);
   });
 
-  test('does not retry unless the platform itself was implicated', () => {
-    expect(shouldRetryLostContainer({ ...base, platformInterrupted: false })).toBe(false);
+  test('does not retry unless something says the container is gone', () => {
+    expect(
+      shouldRetryLostContainer({ ...base, platformInterrupted: false, stateDirectoryEmptied: false })
+    ).toBe(false);
   });
 
   // Everything before the push happens inside the container and dies with it.

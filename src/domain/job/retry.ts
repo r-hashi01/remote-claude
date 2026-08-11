@@ -82,6 +82,15 @@ const PHASES_THAT_REACH_OUTSIDE = new Set(['pushing']);
 export interface LostContainerInput {
   /** Whether talking to the sandbox failed with a platform error this poll. */
   platformInterrupted: boolean;
+  /**
+   * Whether files the executor itself wrote into the container are missing.
+   *
+   * The signature that leaves no error to notice. A sandbox is addressed by id,
+   * so once the instance behind it is gone the next call quietly gets a fresh
+   * empty one: every operation succeeds, nothing throws, and the runner the
+   * executor installed is simply not on disk. Its absence is the evidence.
+   */
+  stateDirectoryEmptied: boolean;
   /** Whether the platform has stopped holding the runner process. */
   runnerProcessMissing: boolean;
   /** The last phase the runner was seen in, if it was ever seen in one. */
@@ -95,19 +104,21 @@ export interface LostContainerInput {
  * Distinct from every other retry rule here, which are all about the window
  * before anything ran. This one deliberately retries a job that *had* run: the
  * container is gone, and with it the workspace, the checkout and the agent's
- * work, so there is no partial state to respect. Observed twelve seconds after a
- * deploy, the container rollout draining the instance underneath a live job —
- * the job's own doing in no part of it.
+ * work, so there is no partial state to respect. Observed twice: twelve seconds
+ * after a deploy, the rollout draining the instance underneath a live job, and
+ * then at the two-minute mark when the sandbox's inactivity timer slept a
+ * container whose only occupant was a background process. The job's own doing in
+ * no part of either.
  *
- * Both conditions are required. A platform error alone could be a hiccup on one
- * call; a missing process alone could be a runner that exited on its own, and
- * its exit is worth reporting rather than papering over.
+ * A missing process is required on top of the container evidence: on its own it
+ * could be a runner that exited by itself, and that exit is worth reporting
+ * rather than papering over with another attempt.
  */
 export function shouldRetryLostContainer(
   input: LostContainerInput,
   maxAttempts: number = MAX_LAUNCH_ATTEMPTS
 ): boolean {
-  if (!input.platformInterrupted) return false;
+  if (!input.platformInterrupted && !input.stateDirectoryEmptied) return false;
   if (!input.runnerProcessMissing) return false;
   if (input.lastKnownPhase && PHASES_THAT_REACH_OUTSIDE.has(input.lastKnownPhase)) return false;
   return input.attemptsSoFar + 1 < maxAttempts;
