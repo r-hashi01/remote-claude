@@ -114,11 +114,21 @@
     "MAX_CONCURRENCY": "3",
     "JOB_TIMEOUT_MS": "1800000",
     "CLAUDE_TIMEOUT_MS": "1500000",
-    // Sandboxes are per-job (rc-<jobId>) and never reused, so the only window
-    // this covers is between a job ending and teardown. Nothing is gained by
-    // holding one longer, and a shorter value bounds how long an unreclaimed
-    // sandbox can stay awake.
-    "SANDBOX_SLEEP_AFTER": "2m",
+    // Must outlast a job, because this is an inactivity timer over *requests to
+    // the container*, not over work happening inside it. A runner started as a
+    // background process holds nothing open, so at "2m" the container was slept
+    // out from under three consecutive jobs, each roughly two minutes in, mid
+    // agent step. It read as the platform losing containers.
+    //
+    // The value was justified here by "sandboxes are per-job and never reused, so
+    // the only window this covers is between a job ending and teardown" — true
+    // about reuse, and wrong about what the timer measures. It only looked
+    // harmless while the pipeline ran as one long-lived exec, which held the
+    // container up as a side effect of how it was invoked.
+    //
+    // Kept above JOB_TIMEOUT_MS so the job's own budget is what bounds a job, and
+    // teardown is what reclaims a sandbox.
+    "SANDBOX_SLEEP_AFTER": "35m",
 
     "ALLOW_PUSH": "true",
 

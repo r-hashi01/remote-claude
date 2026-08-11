@@ -560,6 +560,30 @@ describe('following a running job', () => {
     expect(job?.error).not.toMatch(/startup/);
   });
 
+  // The failure that leaves nothing to catch: the instance behind the sandbox is
+  // gone, so the next call gets a fresh empty one. Every operation succeeds and
+  // the only trace is that what the executor wrote is no longer there.
+  test('requeues a job whose container was replaced under it, error or no error', async () => {
+    const h = await started();
+    const sandbox = h.sandboxes.get(`rc-${h.jobId}`);
+    sandbox.files.set(
+      `${STATE_DIR}/log.ndjson`,
+      ndjson({ seq: 1, stream: 'system', line: '✔ install' })
+    );
+    await h.service.tick();
+
+    // A new, empty instance: nothing throws, and nothing the executor put there
+    // survived — including the runner it installed.
+    sandbox.files.clear();
+    sandbox.processes.delete(`runner-${h.jobId}`);
+    h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
+    await h.service.tick();
+
+    const job = h.jobs.load(h.jobId);
+    expect(job?.status).toBe('queued');
+    expect(job?.attempts).toBe(1);
+  });
+
   // A killed process and a replaced container look identical from the outside —
   // both leave a runner the platform has no record of — and they want opposite
   // responses. What separates them is whether the container's filesystem is

@@ -110,3 +110,45 @@ describe('every declared setting is read by somebody', () => {
     ].join('\n')).toEqual([]);
   });
 });
+
+/**
+ * The sandbox may not be allowed to fall asleep during a job.
+ *
+ * `SANDBOX_SLEEP_AFTER` is an inactivity timer over requests to the container,
+ * not over work happening inside it, and a runner started as a background process
+ * holds nothing open. At "2m" it slept the container out from under three
+ * consecutive jobs, each about two minutes in, mid agent step — and presented as
+ * the platform losing containers, which is a considerably harder thing to read
+ * than a number being too small.
+ *
+ * The value was defended in a comment for a reason that was true about sandbox
+ * reuse and silent about what the timer measures. A comment cannot notice that;
+ * this can.
+ */
+describe('a sandbox outlasts the job it is holding', () => {
+  const durations: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000 };
+
+  function toMs(value: string): number {
+    const match = /^(\d+)(s|m|h)$/.exec(value.trim());
+    if (!match) throw new Error(`unrecognised duration: ${value}`);
+    return Number(match[1]) * (durations[match[2] as string] as number);
+  }
+
+  test.each(['wrangler.jsonc', 'src/infrastructure/config.ts'])(
+    '%s keeps the sleep timer above the job budget',
+    (path) => {
+      const source = read(path);
+      const sleepAfter = /SANDBOX_SLEEP_AFTER[^\n]*?['"](\d+[smh])['"]/.exec(source);
+      // config.ts states the fallback rather than the deployed value; both are a
+      // sleep timer a job can outlive, so both are checked the same way.
+      const fallback = /sleepAfter:[^\n]*?['"](\d+[smh])['"]/.exec(source);
+      const configured = sleepAfter?.[1] ?? fallback?.[1];
+      expect(configured, `no sleep timer found in ${path}`).toBeDefined();
+
+      const budget = /JOB_TIMEOUT_MS[^\n]*?['"](\d+)['"]/.exec(read('wrangler.jsonc'));
+      expect(budget?.[1], 'no job budget found in wrangler.jsonc').toBeDefined();
+
+      expect(toMs(configured as string)).toBeGreaterThan(Number(budget?.[1]));
+    }
+  );
+});

@@ -55,7 +55,10 @@ export function loadConfig(env: Env): Config {
     heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
     stallTimeoutMs: DEFAULT_STALL_TIMEOUT_MS,
     retentionMs: RETENTION_MS,
-    sleepAfter: env.SANDBOX_SLEEP_AFTER || '5m',
+    // Above jobTimeoutMs on purpose: this is an inactivity timer over requests to
+    // the container, and a job's work happens inside one. See the conventions
+    // test that keeps the two in that order.
+    sleepAfter: env.SANDBOX_SLEEP_AFTER || '35m',
     allowPush: bool(env.ALLOW_PUSH),
     allowCustomRepo: bool(env.ALLOW_CUSTOM_REPO),
     allowedHosts: parseAllowedHosts(env),
