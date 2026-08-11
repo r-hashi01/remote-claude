@@ -5,6 +5,7 @@ import {
   type ClaudeStreamEvent,
 } from '../domain/agent/acp';
 import { assessRunnerHealth, exceededDeadline } from '../domain/job/health';
+import { Refusal } from '../domain/job/errors';
 import { Job } from '../domain/job/job';
 import type {
   JobCommands,
@@ -180,7 +181,7 @@ export class JobService {
 
     if (wantsPush) {
       if (!policy.allowPush) {
-        throw new Error(
+        throw new Refusal(
           'this executor will not push: pushing is disabled on it. Set ALLOW_PUSH=true in its ' +
             'wrangler.jsonc vars and give its GitHub App Contents: Read and write, or fetch the ' +
             'diff and apply it yourself.',
@@ -225,7 +226,7 @@ export class JobService {
     const { jobs, clock, ids, scheduler } = this.deps;
 
     const previous = jobs.load(previousId);
-    if (!previous) throw new Error(`job ${previousId} is not one this executor knows about`);
+    if (!previous) throw new Refusal(`job ${previousId} is not one this executor knows about`);
 
     const job = Job.continuing(previous, {
       id: ids.next(),
@@ -878,7 +879,9 @@ export class JobService {
         dir: WORKSPACE_DIR,
         name: `job-${jobId}`,
         ttlSeconds: Math.round(policy.retentionMs / 1000),
-        respectGitignore: true,
+        // Named rather than inferred: git rules apply only inside a repository,
+        // and this directory is one above it.
+        excludes: ['node_modules'],
       });
 
       // Null means no store is configured for this deployment. That is a

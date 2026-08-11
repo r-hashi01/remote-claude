@@ -96,21 +96,31 @@ class CloudflareSandboxSession implements SandboxSession {
     await this.sandbox.killAllProcesses();
   }
 
+  /**
+   * Store a directory, so a later sandbox can start from it.
+   *
+   * Null means only one thing: no bucket is bound, so this deployment does not
+   * keep workspaces. **Failures throw.** They used to be swallowed here on the
+   * grounds that a snapshot is an optimisation — which stopped being true when
+   * continuing a job came to depend on it (ADR 0011). The first continuation
+   * anybody tried was refused with "kept no workspace", and the reason it was
+   * missing was nowhere to be found.
+   *
+   * `excludes` rather than `gitignore` for node_modules: the SDK applies git
+   * rules only when the directory is itself inside a repository, and `/workspace`
+   * is not — the repository is one level down. Asking for gitignore there is a
+   * request that silently does nothing.
+   */
   async snapshot(options: SnapshotOptions): Promise<SnapshotRef | null> {
     if (!this.backupBucket) return null;
-    try {
-      const backup = await this.sandbox.createBackup({
-        dir: options.dir,
-        ...(options.name ? { name: options.name } : {}),
-        ...(options.ttlSeconds ? { ttl: options.ttlSeconds } : {}),
-        ...(options.respectGitignore ? { gitignore: true } : {}),
-      });
-      return { provider: PROVIDER_NAME, id: backup.id, dir: backup.dir };
-    } catch {
-      // A snapshot is an optimisation; failing to take one must never break
-      // the caller's work.
-      return null;
-    }
+    const backup = await this.sandbox.createBackup({
+      dir: options.dir,
+      ...(options.name ? { name: options.name } : {}),
+      ...(options.ttlSeconds ? { ttl: options.ttlSeconds } : {}),
+      ...(options.respectGitignore ? { gitignore: true } : {}),
+      ...(options.excludes ? { excludes: options.excludes } : {}),
+    });
+    return { provider: PROVIDER_NAME, id: backup.id, dir: backup.dir };
   }
 
   async restore(ref: SnapshotRef): Promise<boolean> {

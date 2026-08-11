@@ -42,8 +42,15 @@ export interface SnapshotOptions {
   dir: string;
   name?: string;
   ttlSeconds?: number;
-  /** Exclude paths matched by .gitignore. */
+  /**
+   * Exclude paths matched by .gitignore.
+   *
+   * Only effective when `dir` is itself inside a git repository. For a directory
+   * above the repository, use `excludes`.
+   */
   respectGitignore?: boolean;
+  /** Glob patterns to leave out, regardless of git. */
+  excludes?: string[];
 }
 
 /**
@@ -83,7 +90,10 @@ export interface SandboxSession {
   /** Terminate every running process, leaving the sandbox itself alive. */
   killAll(): Promise<void>;
 
-  /** Returns null when snapshotting is unavailable or fails; never throws. */
+  /**
+   * Returns null when this deployment keeps no workspaces. Throws when storing
+   * one was attempted and failed — the caller decides whether that matters.
+   */
   snapshot(options: SnapshotOptions): Promise<SnapshotRef | null>;
 
   /** Returns false when the snapshot is missing, expired or unusable. */

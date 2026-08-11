@@ -1,4 +1,5 @@
 import type { GitHubAccess, OpenPullRequest } from '../../application/ports';
+import { Refusal } from '../../domain/job/errors';
 import {
   canOpenPullRequests,
   canPush,
@@ -101,7 +102,7 @@ export async function assertRepositoryReachable(env: Env, repoUrl: string): Prom
 
   if ((await fetchRepository(env, slug)) !== null) return;
 
-  throw new Error(
+  throw new Refusal(
     `this executor's GitHub App installation cannot reach ${slug}. The repository must be ` +
       `added to installation ${installationId} (GitHub → Settings → Applications → the App → ` +
       `Configure → Repository access) before a job can run against it.`
@@ -124,7 +125,7 @@ export async function assertRepositoryWritable(env: Env, repoUrl: string): Promi
   await assertRepositoryReachable(env, repoUrl);
 
   if (!canPush(await installationPermissions(env))) {
-    throw new Error(
+    throw new Refusal(
       `this executor's GitHub App installation cannot write to ${slug}. Its Contents permission ` +
         'must be Read and write for a job to push (GitHub → Settings → Developer settings → ' +
         'GitHub Apps → the App → Permissions), and permission changes have to be accepted on the ' +
@@ -143,7 +144,7 @@ export async function assertCanOpenPullRequests(env: Env, repoUrl: string): Prom
   const slug = repositorySlug(repoUrl);
   if (canOpenPullRequests(await installationPermissions(env))) return;
 
-  throw new Error(
+  throw new Refusal(
     `this executor's GitHub App installation cannot open pull requests on ${slug}. Its Pull ` +
       'requests permission must be Read and write, and the change has to be accepted on the ' +
       'installation before it takes effect.'

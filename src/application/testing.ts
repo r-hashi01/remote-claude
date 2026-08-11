@@ -387,8 +387,12 @@ export class FakeSandbox implements SandboxSession {
   restored: SnapshotRef[] = [];
   restoreSucceeds = true;
 
+  /** Set to make storing fail, the way missing R2 credentials do. */
+  snapshotError: string | null = null;
+
   async snapshot(options: SnapshotOptions): Promise<SnapshotRef | null> {
     this.snapshotted.push(options);
+    if (this.snapshotError) throw new Error(this.snapshotError);
     return this.snapshotRef;
   }
   async restore(ref: SnapshotRef): Promise<boolean> {

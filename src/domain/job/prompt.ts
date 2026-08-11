@@ -1,3 +1,4 @@
+import { Refusal } from './errors';
 /** Hard cap on an accepted prompt. */
 export const MAX_PROMPT_LENGTH = 20_000;
 
@@ -10,9 +11,9 @@ export const MAX_PROMPT_LENGTH = 20_000;
  */
 export function normalisePrompt(raw: string | undefined): string {
   const prompt = (raw ?? '').trim();
-  if (!prompt) throw new Error('prompt is required');
+  if (!prompt) throw new Refusal('prompt is required');
   if (prompt.length > MAX_PROMPT_LENGTH) {
-    throw new Error(`prompt exceeds ${MAX_PROMPT_LENGTH} characters`);
+    throw new Refusal(`prompt exceeds ${MAX_PROMPT_LENGTH} characters`);
   }
   return prompt;
 }

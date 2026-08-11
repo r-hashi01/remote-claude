@@ -1,3 +1,4 @@
+import { Refusal } from './errors';
 /**
  * Git refs are interpolated into shell commands in the container, so the
  * accepted character set is deliberately boring. `..` is excluded separately:
@@ -7,7 +8,7 @@
 export function sanitizeRef(ref: string): string {
   const trimmed = ref.trim();
   if (!/^[A-Za-z0-9._\/-]{1,255}$/.test(trimmed) || trimmed.includes('..')) {
-    throw new Error(`invalid branch name: ${trimmed}`);
+    throw new Refusal(`invalid branch name: ${trimmed}`);
   }
   return trimmed;
 }

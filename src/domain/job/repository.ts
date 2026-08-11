@@ -1,3 +1,4 @@
+import { Refusal } from './errors';
 /**
  * Which repository a job runs against.
  *
@@ -15,11 +16,11 @@ export function assertSafeRepoUrl(raw: string): string {
   try {
     url = new URL(raw);
   } catch {
-    throw new Error('repo must be an absolute https URL');
+    throw new Refusal('repo must be an absolute https URL');
   }
-  if (url.protocol !== 'https:') throw new Error('repo must use https');
-  if (url.username || url.password) throw new Error('repo URL must not embed credentials');
-  if (url.hostname !== 'github.com') throw new Error('repo must be hosted on github.com');
+  if (url.protocol !== 'https:') throw new Refusal('repo must use https');
+  if (url.username || url.password) throw new Refusal('repo URL must not embed credentials');
+  if (url.hostname !== 'github.com') throw new Refusal('repo must be hosted on github.com');
   return url.toString();
 }
 
@@ -43,7 +44,7 @@ export function repositorySlug(repoUrl: string): string {
     .replace(/\/+$/, '');
   const segments = path.split('/');
   if (segments.length !== 2 || !segments[0] || !segments[1]) {
-    throw new Error(`repo must be a github.com/<owner>/<name> URL, got ${repoUrl}`);
+    throw new Refusal(`repo must be a github.com/<owner>/<name> URL, got ${repoUrl}`);
   }
   return `${segments[0]}/${segments[1]}`;
 }
@@ -74,7 +75,7 @@ export function resolveRepository(
     return { repo: configured, isCustom: false };
   }
   if (!allowCustom) {
-    throw new Error(
+    throw new Refusal(
       `this executor is pinned to ${configured} and will not run against ${requested}: ` +
         'custom repositories are disabled on the executor. Set ALLOW_CUSTOM_REPO=true in its ' +
         'wrangler.jsonc vars and redeploy, or point it at that repository.'

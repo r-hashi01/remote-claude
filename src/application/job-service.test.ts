@@ -783,10 +783,31 @@ describe('carrying a workspace between sandboxes', () => {
     await h.service.tick();
 
     expect(sandbox.snapshotted).toHaveLength(1);
-    expect(sandbox.snapshotted[0]).toMatchObject({ dir: '/workspace', respectGitignore: true });
+    // Excluded by name, not by git: git rules apply only inside a repository and
+    // /workspace is one above it, so asking for gitignore there does nothing.
+    expect(sandbox.snapshotted[0]).toMatchObject({
+      dir: '/workspace',
+      excludes: ['node_modules'],
+    });
     // node_modules is reinstallable; the conversation is not.
     expect(h.jobs.load(job.id)?.toRecord().workspace).toEqual({ provider: 'fake', id: 'snap-1' });
     expect(sandbox.destroyed).toBe(true);
+  });
+
+  // It used to be swallowed as "a snapshot is an optimisation". Continuing a job
+  // depends on it now, so the reason has to reach somebody.
+  test('says why a workspace could not be kept', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.snapshotError = 'R2_ACCESS_KEY_ID is not configured';
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() }));
+
+    await h.service.tick();
+
+    expect(h.jobs.load(job.id)?.status).toBe('completed');
+    expect(h.logs.all(job.id).join('\n')).toMatch(/could not be kept: R2_ACCESS_KEY_ID/);
   });
 
   test('a failed job keeps its workspace too — that is the one worth continuing', async () => {

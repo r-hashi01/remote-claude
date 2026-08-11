@@ -79,3 +79,27 @@ ACP は editor から人が操縦するための面として残す。
 
 **「設定できるが呼ばれない」ものは、それを必要とする機能が来たときに初めて正しい形が分かる。**
 workspace cache を「速度のため」に配線していたら、会話を含める設計にはならなかった。
+
+## 追記 (2026-08-11) — 最初の継続で分かった2つの事実
+
+**実際に継続を試したら `kept no workspace` で拒否された。** バケットは bind してあったので、
+snapshot が失敗していた。そして**失敗した理由はどこにも残っていなかった** — provider が
+「snapshot は最適化だから」と例外を飲んでいた。この ADR がそれを最適化ではなくしたのに、
+そのコメントと実装は変わっていなかった。**依存の向きが変わったとき、飲んでいた例外は毒になる。**
+
+分かった事実を2つ記録する。
+
+1. **presigned upload に `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` が要る。**
+   バインディングだけでは足りない（Sandbox SDK は container から presigned URL で直接 R2 へ上げる）。
+   バケットが「唯一のスイッチ」と書いたが、正確には**バケット + その2つの secret**。
+
+2. **`gitignore` オプションは、対象ディレクトリが git repo の中にある場合だけ効く。**
+   `/workspace` は repo ではない（repo は `/workspace/repo`）ので、
+   **`node_modules` は除外されていなかった。** `excludes: ['node_modules']` で名指しに変えた。
+   「git に聞けばいい」は、git が答えられる場所にいるときだけ正しい。
+
+3. **restore は永続展開ではなく FUSE overlay マウント。** SDK のドキュメントいわく
+   「マウントは container が動いているあいだだけ持続し、sandbox が sleep すると失われる」。
+   継続ジョブは restore 直後に pipeline を走らせ、終わったら再 snapshot するので成立するが、
+   **継続ターンの最中に container が sleep したら workspace は消える。**
+   2秒ごとの poll が活動として効いているが、これは前提であって保証ではない。
