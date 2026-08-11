@@ -71,12 +71,27 @@ export function loadConfig(env: Env): Config {
 /** Used by the Sandbox subclass, which needs the list before full config load. */
 export function parseAllowedHosts(env: Partial<Env>): string[] {
   const raw = (env.SANDBOX_ALLOWED_HOSTS ?? '').trim();
-  if (!raw) return DEFAULT_ALLOWED_HOSTS;
+  // A copy either way: the rules below add to this list, and the default is
+  // shared.
   const hosts = raw
-    .split(',')
-    .map((h) => h.trim())
-    .filter(Boolean);
+    ? raw
+        .split(',')
+        .map((host) => host.trim())
+        .filter(Boolean)
+    : [...DEFAULT_ALLOWED_HOSTS];
   // api.anthropic.com is required for Claude Code to function at all.
   if (!hosts.includes('api.anthropic.com')) hosts.push('api.anthropic.com');
+
+  // Derived, not configured. A deployment that keeps workspaces uploads them
+  // from inside the container to its own R2 endpoint, and the network is
+  // deny-by-default — so enabling one feature would otherwise require
+  // remembering to open a hole for it somewhere else entirely. It did: the first
+  // upload that got as far as trying failed with a 520 from a host nobody had
+  // allowed.
+  const account = env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  if (account && !hosts.some((host) => host.endsWith('.r2.cloudflarestorage.com'))) {
+    hosts.push(`${account}.r2.cloudflarestorage.com`);
+  }
+
   return hosts;
 }

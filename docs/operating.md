@@ -220,14 +220,33 @@ binding, and credentials of its own:
 ```bash
 npx wrangler r2 bucket create remote-claude-workspaces
 npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
-npx wrangler secret put R2_ACCESS_KEY_ID
-npx wrangler secret put R2_SECRET_ACCESS_KEY
+npx wrangler secret put R2_ACCESS_KEY_ID       # from Dashboard → R2 → Manage API tokens
+npx wrangler secret put R2_SECRET_ACCESS_KEY   # the S3 pair, not the "Token value"
+```
+
+Those two are the **S3-compatible** credentials shown once when an R2 API token is
+created, with **Object Read & Write** (read is what a restore needs). The token
+value on the same page is for Cloudflare's own API and is not one of these.
+
+`wrangler secret put` reports success on empty input, and the sandbox treats an
+empty value exactly like a missing one — so a secret that looks set can still be
+absent as far as this feature is concerned. Piping from a file avoids it:
+
+```bash
+npx wrangler secret put R2_ACCESS_KEY_ID < key.txt && rm key.txt
 ```
 
 With all of them, workspaces are kept for as long as the job record is (seven
 days). With none, jobs run exactly as before and simply cannot be continued.
 There is no separate on/off flag, because a flag and a binding can disagree — and
 the one that used to be here did, for as long as it existed.
+
+The container's own upload host is opened automatically: a deployment that has an
+account id gets `<account>.r2.cloudflarestorage.com` added to its allowed hosts,
+because a deployment that keeps workspaces has to be able to reach the bucket it
+keeps them in. Enabling one feature should not require remembering to open a hole
+for it somewhere else — the first upload that got that far failed with a 520 from
+a host nobody had allowed.
 
 Two of those four are read by the sandbox SDK rather than by this Worker, which
 is why they can look unused when you grep for them. A sweep for dead
