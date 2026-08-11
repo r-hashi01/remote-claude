@@ -688,6 +688,88 @@ describe('opening a pull request', () => {
   });
 });
 
+describe('continuing a job', () => {
+  /** A finished job with a workspace and a conversation to carry on. */
+  async function finished(h = harness()) {
+    const job = await h.service.createJob({ prompt: 'wire the Task to a sandbox run' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(
+      `${STATE_DIR}/log.ndjson`,
+      ndjson({
+        seq: 1,
+        stream: 'agent',
+        line: JSON.stringify({ type: 'system', subtype: 'init', session_id: 'conv-1' }),
+      })
+    );
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() }));
+    await h.service.tick();
+    return { h, previousId: job.id, branch: job.branch };
+  }
+
+  test('queues a turn that restores the workspace and resumes the conversation', async () => {
+    const { h, previousId, branch } = await finished();
+
+    const next = await h.service.continueJob(previousId, { prompt: 'use the interface' });
+
+    expect(next.branch).toBe(branch);
+    expect(next.continues).toBe(previousId);
+    expect(next.restoreFrom).toEqual({ provider: 'fake', id: 'snap-1' });
+    expect(next.resumeSession).toBe('conv-1');
+    expect(next.status).toBe('queued');
+  });
+
+  test('the runner is told which conversation to resume', async () => {
+    const { h, previousId } = await finished();
+
+    const next = await h.service.continueJob(previousId, { prompt: 'use the interface' });
+    await h.service.tick();
+
+    const written = JSON.parse(
+      h.sandboxes.get(`rc-${next.id}`).files.get(`${STATE_DIR}/job.json`) as string
+    );
+    expect(written.resumeSession).toBe('conv-1');
+  });
+
+  test('a first turn is told nothing about resuming', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+
+    const written = JSON.parse(
+      h.sandboxes.get(`rc-${job.id}`).files.get(`${STATE_DIR}/job.json`) as string
+    );
+    expect(written.resumeSession).toBeUndefined();
+  });
+
+  test('refuses to continue a job it does not know', async () => {
+    const { service } = harness();
+    await expect(service.continueJob('nope', { prompt: 'x' })).rejects.toThrow(/not one this executor knows/);
+  });
+
+  test('refuses to continue a job that is still running', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+
+    await expect(h.service.continueJob(job.id, { prompt: 'x' })).rejects.toThrow(
+      /only be continued once it has finished/
+    );
+  });
+
+  test('refuses when the deployment kept no workspace', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.snapshotRef = null;
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() }));
+    await h.service.tick();
+
+    await expect(h.service.continueJob(job.id, { prompt: 'x' })).rejects.toThrow(/kept no workspace/);
+  });
+});
+
 describe('carrying a workspace between sandboxes', () => {
   // A job that stops to ask a question is continued, not restarted (ADR 0011),
   // and continuing needs the tree and the conversation that produced it.

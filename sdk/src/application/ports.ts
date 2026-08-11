@@ -1,5 +1,5 @@
 import type { AuthProbe, SandboxLedger } from '../domain/executor.js';
-import type { JobRecord, JobSummary, LogPage, StartJob } from '../domain/job.js';
+import type { ContinueJob, JobRecord, JobSummary, LogPage, StartJob } from '../domain/job.js';
 
 export type { AuthProbe, SandboxLedger, SandboxLedgerEntry } from '../domain/executor.js';
 
@@ -17,6 +17,8 @@ export interface JobGateway {
   ping(): Promise<boolean>;
   checkAuth(): Promise<AuthProbe>;
   create(input: StartJob): Promise<JobRecord>;
+  /** A follow-up turn on a finished job. */
+  continue(jobId: string, input: ContinueJob): Promise<JobRecord>;
   get(jobId: string): Promise<JobRecord>;
   list(limit: number): Promise<JobSummary[]>;
   cancel(jobId: string): Promise<void>;

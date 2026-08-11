@@ -1,4 +1,5 @@
 import { ACP_PROTOCOL_VERSION } from '../../domain/agent/acp';
+import type { ContinueRequest } from '../../application/job-service';
 import type { JobRequest } from '../../domain/job/record';
 import type { Env } from '../../infrastructure/env';
 import { probeClaudeAuth } from '../../infrastructure/health/claude-auth';
@@ -108,7 +109,7 @@ export async function route(request: Request, env: Env): Promise<Response> {
     }
   }
 
-  const match = /^\/jobs\/([A-Za-z0-9-]+)(\/logs|\/diff|\/cancel)?$/.exec(path);
+  const match = /^\/jobs\/([A-Za-z0-9-]+)(\/logs|\/diff|\/cancel|\/continue)?$/.exec(path);
   if (match) {
     const [, id, suffix] = match;
     const jobId = id as string;
@@ -132,6 +133,16 @@ export async function route(request: Request, env: Env): Promise<Response> {
       const patch = await jobs.getPatch(jobId);
       if (patch === null) return notFound();
       return new Response(patch, { headers: { 'content-type': 'text/x-patch; charset=utf-8' } });
+    }
+
+    // A follow-up turn on a finished job: same branch, same workspace, same
+    // conversation (ADR 0011). What it may say for itself is a prompt and the
+    // job options; everything else is inherited, so it cannot drift from the
+    // job it continues.
+    if (suffix === '/continue' && method === 'POST') {
+      const body = await readJson<ContinueRequest>(request);
+      const created = await jobs.continueJob(jobId, body);
+      return Response.json({ ...created, jobId: created.id }, { status: 202 });
     }
 
     if (suffix === '/cancel' && method === 'POST') {

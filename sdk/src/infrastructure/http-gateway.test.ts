@@ -166,3 +166,28 @@ describe('logs', () => {
     expect(page.nextSince).toBe(8);
   });
 });
+
+describe('continuing a job', () => {
+  test('posts the follow-up turn against the job it continues', async () => {
+    const { subject, calls } = gateway({
+      '/continue': () => Response.json({ ...JOB, id: 'job-2', continues: 'job-1' }, { status: 202 }),
+    });
+
+    const next = await subject.continue('job-1', { prompt: 'use the interface' });
+
+    expect(calls[0]?.url).toBe('https://rc.example.workers.dev/jobs/job-1/continue');
+    expect(calls[0]?.init.method).toBe('POST');
+    expect(JSON.parse(calls[0]?.init.body as string)).toEqual({ prompt: 'use the interface' });
+    expect(next.continues).toBe('job-1');
+  });
+
+  // The executor refuses what it cannot continue, and says which part is missing.
+  test('surfaces a refusal as it was written', async () => {
+    const { subject } = gateway({
+      '/continue': () =>
+        Response.json({ error: 'job job-1 kept no workspace, so there is nothing to continue.' }, { status: 400 }),
+    });
+
+    await expect(subject.continue('job-1', { prompt: 'x' })).rejects.toThrow(/kept no workspace/);
+  });
+});

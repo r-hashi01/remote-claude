@@ -28,6 +28,16 @@ export interface CreateJobInput {
   now: number;
 }
 
+export interface ContinueJobInput {
+  id: string;
+  /** The answer to whatever the previous turn stopped for. */
+  prompt: string;
+  options?: Partial<JobOptions>;
+  commands?: Partial<JobCommands>;
+  pullRequest?: PullRequestRequest;
+  now: number;
+}
+
 export interface SettleDetails {
   error?: string;
   result?: JobResult;
@@ -70,6 +80,63 @@ export class Job {
       commands: definedOnly(input.commands),
       ...(input.pullRequest ? { pullRequest: input.pullRequest } : {}),
     });
+  }
+
+  /**
+   * A follow-up turn on a finished job.
+   *
+   * Inherits nearly everything, because a continuation is the same piece of work
+   * carrying on: the same repository, the same base, the same branch — so the
+   * diff keeps growing in one place and a pull request opened for it keeps being
+   * the right one — and the same commands, unless this turn says otherwise.
+   *
+   * What it does not inherit is the prompt. That is the answer to whatever the
+   * last turn stopped for.
+   *
+   * The two things that make it a continuation rather than a new job are the
+   * workspace it restores and the conversation it resumes. Both are required:
+   * without the workspace it would start from a fresh clone, and without the
+   * conversation the agent would have to reconstruct what it already worked out.
+   */
+  static continuing(previous: Job, input: ContinueJobInput): Job {
+    const before = previous.toRecord();
+
+    if (!previous.isTerminal) {
+      throw new Error(
+        `job ${before.id} is still ${before.status}; a job can only be continued once it has finished.`
+      );
+    }
+    if (!before.workspace) {
+      throw new Error(
+        `job ${before.id} kept no workspace, so there is nothing to continue. Workspaces are kept ` +
+          'only when the executor has a bucket bound for them, and only for as long as the job record.'
+      );
+    }
+    if (!before.claudeSessionId) {
+      throw new Error(
+        `job ${before.id} never started a conversation — it stopped before the agent ran — so there ` +
+          'is nothing to resume. Submit a new job instead.'
+      );
+    }
+
+    const job = Job.create({
+      id: input.id,
+      prompt: input.prompt,
+      repo: before.repo,
+      baseBranch: before.baseBranch,
+      // The same branch: this is the same work carrying on, not a second attempt
+      // at it.
+      branch: before.branch,
+      options: { ...before.options, ...input.options },
+      commands: { ...before.commands, ...input.commands },
+      pullRequest: input.pullRequest ?? before.pullRequest,
+      now: input.now,
+    });
+
+    job.record.continues = before.id;
+    job.record.restoreFrom = before.workspace;
+    job.record.resumeSession = before.claudeSessionId;
+    return job;
   }
 
   /** Rehydrate from storage. Trusted: it was validated on the way in. */
@@ -210,6 +277,16 @@ export class Job {
   /** The workspace this job starts from, when it continues another. */
   get restoreFrom(): WorkspaceRef | undefined {
     return this.record.restoreFrom;
+  }
+
+  /** The conversation this job resumes. */
+  get resumeSession(): string | undefined {
+    return this.record.resumeSession;
+  }
+
+  /** The job this one continues. */
+  get continues(): string | undefined {
+    return this.record.continues;
   }
 
   /** The tree and conversation this job left behind. */

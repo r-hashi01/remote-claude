@@ -3,28 +3,30 @@ import {
   translateEvent,
   type AgentUsage,
   type ClaudeStreamEvent,
-} from "../domain/agent/acp";
-import { assessRunnerHealth, exceededDeadline } from "../domain/job/health";
-import { Job } from "../domain/job/job";
+} from '../domain/agent/acp';
+import { assessRunnerHealth, exceededDeadline } from '../domain/job/health';
+import { Job } from '../domain/job/job';
 import type {
+  JobCommands,
   JobRecord,
   JobRequest,
   JobResult,
   JobSummary,
   LogLine,
-} from "../domain/job/record";
-import { composePullRequest } from "../domain/job/pull-request";
-import { resolveRepository } from "../domain/job/repository";
+  PullRequestRequest,
+} from '../domain/job/record';
+import { composePullRequest } from '../domain/job/pull-request';
+import { resolveRepository } from '../domain/job/repository';
 import {
   shouldRetryLaunch,
   shouldRetrySilentStartup,
-} from "../domain/job/retry";
+} from '../domain/job/retry';
 import {
   sandboxIdForJob,
   shouldReclaim,
   summariseLedger,
   type SandboxLedger,
-} from "../domain/sandbox/ledger";
+} from '../domain/sandbox/ledger';
 import type {
   ArtifactStore,
   Clock,
@@ -39,12 +41,12 @@ import type {
   SandboxProvider,
   SandboxSession,
   Scheduler,
-} from "./ports";
-import { REPO_DIR, STATE_DIR, WORKSPACE_DIR } from "./workspace";
+} from './ports';
+import { REPO_DIR, STATE_DIR, WORKSPACE_DIR } from './workspace';
 
 // Re-exported because these are part of this module's story (the runner contract
 // lives here) while the values themselves are shared with the session path.
-export { REPO_DIR, STATE_DIR } from "./workspace";
+export { REPO_DIR, STATE_DIR } from './workspace';
 
 /** How often to mirror a running job's state files into this executor. */
 export const POLL_INTERVAL_MS = 2_000;
@@ -59,6 +61,16 @@ export const SWEEP_INTERVAL_MS = 60 * 1000;
 
 /** How much of the runner's own output to quote when it dies. */
 const RUNNER_OUTPUT_TAIL = 2_000;
+
+/** What a follow-up turn may say for itself. Everything else is inherited. */
+export interface ContinueRequest {
+  prompt: string;
+  skipChecks?: boolean;
+  keepSandbox?: boolean;
+  push?: boolean;
+  commands?: Partial<JobCommands>;
+  pullRequest?: PullRequestRequest;
+}
 
 export interface JobServiceDeps {
   policy: ExecutorPolicy;
@@ -169,9 +181,9 @@ export class JobService {
     if (wantsPush) {
       if (!policy.allowPush) {
         throw new Error(
-          "this executor will not push: pushing is disabled on it. Set ALLOW_PUSH=true in its " +
-            "wrangler.jsonc vars and give its GitHub App Contents: Read and write, or fetch the " +
-            "diff and apply it yourself.",
+          'this executor will not push: pushing is disabled on it. Set ALLOW_PUSH=true in its ' +
+            'wrangler.jsonc vars and give its GitHub App Contents: Read and write, or fetch the ' +
+            'diff and apply it yourself.',
         );
       }
       // The switch says this deployment is willing; GitHub says whether it can.
@@ -201,22 +213,57 @@ export class JobService {
     return job;
   }
 
+  /**
+   * A follow-up turn on a finished job.
+   *
+   * Everything about what is inherited lives in `Job.continuing`; this is the
+   * queueing around it. The refusals are the interesting part, and they all say
+   * the same thing in different words: a continuation that quietly becomes a
+   * fresh start is worse than one that does not happen.
+   */
+  async continueJob(previousId: string, request: ContinueRequest): Promise<Job> {
+    const { jobs, clock, ids, scheduler } = this.deps;
+
+    const previous = jobs.load(previousId);
+    if (!previous) throw new Error(`job ${previousId} is not one this executor knows about`);
+
+    const job = Job.continuing(previous, {
+      id: ids.next(),
+      prompt: request.prompt,
+      options: {
+        skipChecks: request.skipChecks,
+        keepSandbox: request.keepSandbox,
+        push: request.push,
+      },
+      commands: request.commands,
+      pullRequest: request.pullRequest,
+      now: clock.now(),
+    });
+
+    this.prune();
+    jobs.save(job);
+    this.log(job.id, 'system', `continuing job ${previousId} on ${job.branch}`);
+    this.deps.logs.flush(job.id);
+    await scheduler.scheduleIn(0);
+    return job;
+  }
+
   async cancelJob(id: string): Promise<Job | null> {
     const { jobs, logs, clock, running } = this.deps;
     const job = jobs.load(id);
     if (!job) return null;
 
-    if (job.status === "queued") {
-      job.settle("cancelled", clock.now());
+    if (job.status === 'queued') {
+      job.settle('cancelled', clock.now());
       jobs.save(job);
-      this.log(id, "system", "job cancelled before it started");
+      this.log(id, 'system', 'job cancelled before it started');
       logs.flush(id);
       return job;
     }
 
     if (running.requestCancel(id)) {
       // The next poll observes this, kills the container processes and settles.
-      this.log(id, "system", "cancellation signal sent");
+      this.log(id, 'system', 'cancellation signal sent');
       logs.flush(id);
       return jobs.load(id);
     }
@@ -234,7 +281,7 @@ export class JobService {
    * reads the container's own status and decides.
    */
   adopt(): void {
-    for (const job of this.deps.jobs.listByStatus(["starting", "running"])) {
+    for (const job of this.deps.jobs.listByStatus(['starting', 'running'])) {
       this.deps.running.begin(job.id);
       this.recovered.add(job.id);
     }
@@ -263,7 +310,7 @@ export class JobService {
           await this.pollJob(jobId);
         } catch (error) {
           // One unhealthy job must not stop the others or the sweep.
-          this.log(jobId, "system", `poll failed: ${errorMessage(error)}`);
+          this.log(jobId, 'system', `poll failed: ${errorMessage(error)}`);
           this.deps.logs.flush(jobId);
         }
       }
@@ -326,7 +373,7 @@ export class JobService {
       // Cloning stays on this side: it needs credentials injected outside the
       // container, which is the whole point of ADR 0002.
       if (!restored) {
-        this.log(job.id, "system", `cloning ${job.repo} (${job.baseBranch})`);
+        this.log(job.id, 'system', `cloning ${job.repo} (${job.baseBranch})`);
         try {
           await sandbox.cloneRepository(job.repo, {
             branch: job.baseBranch,
@@ -339,7 +386,7 @@ export class JobService {
           // likelier one — but name both rather than guess.
           throw new Error(
             `cloning ${job.repo} at branch "${job.baseBranch}" failed: ${errorMessage(error)}. ` +
-              "Check that the branch exists and that the GitHub App installation includes this repository.",
+              'Check that the branch exists and that the GitHub App installation includes this repository.',
           );
         }
       }
@@ -352,6 +399,10 @@ export class JobService {
           branch: job.branch,
           baseBranch: job.baseBranch,
           options: job.options,
+          // Set only on a follow-up turn: the runner passes it to `--resume`, so
+          // the agent carries on the conversation instead of meeting the work for
+          // the first time.
+          resumeSession: job.resumeSession,
           // The deployment's commands, with this job's overrides on top. The
           // install step is not covered by skipChecks, so a job on another
           // repository has to be able to replace it.
@@ -377,7 +428,7 @@ export class JobService {
           `setsid nohup node ${STATE_DIR}/runner.mjs ${STATE_DIR} ` +
           `> ${STATE_DIR}/runner.out 2>&1 < /dev/null &`,
         {
-          cwd: "/workspace",
+          cwd: '/workspace',
           env: this.deps.containerEnvironment?.() ?? {},
           timeoutMs: 30_000,
         },
@@ -385,7 +436,7 @@ export class JobService {
 
       job.markRunning();
       jobs.save(job);
-      this.log(job.id, "system", "runner started in container");
+      this.log(job.id, 'system', 'runner started in container');
       await scheduler.scheduleIn(POLL_INTERVAL_MS);
     } catch (error) {
       const message = errorMessage(error);
@@ -402,14 +453,14 @@ export class JobService {
         jobs.save(current);
         this.log(
           job.id,
-          "system",
+          'system',
           `platform interrupted the start (attempt ${attempts}); requeued: ${message}`,
         );
         await scheduler.scheduleIn(POLL_INTERVAL_MS);
         return;
       }
 
-      await this.settle(job.id, "failed", message);
+      await this.settle(job.id, 'failed', message);
     }
   }
 
@@ -429,15 +480,15 @@ export class JobService {
 
     this.log(
       job.id,
-      "system",
-      "restoring the workspace of the job this continues",
+      'system',
+      'restoring the workspace of the job this continues',
     );
     if (await sandbox.restore(from)) return true;
 
     throw new Error(
-      "the workspace of the job this continues could not be restored, so there is " +
-        "nothing to continue. It may have expired: workspaces are kept for as long " +
-        "as the job record, and no longer.",
+      'the workspace of the job this continues could not be restored, so there is ' +
+        'nothing to continue. It may have expired: workspaces are kept for as long ' +
+        'as the job record, and no longer.',
     );
   }
 
@@ -455,7 +506,7 @@ export class JobService {
 
     if (running.isCancelled(jobId)) {
       await this.stopContainer(jobId);
-      await this.settle(jobId, "cancelled", "cancelled by request");
+      await this.settle(jobId, 'cancelled', 'cancelled by request');
       return;
     }
 
@@ -466,7 +517,7 @@ export class JobService {
     });
     if (overdue) {
       await this.stopContainer(jobId);
-      await this.settle(jobId, "failed", overdue);
+      await this.settle(jobId, 'failed', overdue);
       return;
     }
 
@@ -479,8 +530,8 @@ export class JobService {
       if (!alive) {
         this.log(
           jobId,
-          "system",
-          "worker restarted before the runner started; requeued",
+          'system',
+          'worker restarted before the runner started; requeued',
         );
         running.end(jobId);
         await this.teardown(jobId);
@@ -493,8 +544,8 @@ export class JobService {
       }
       this.log(
         jobId,
-        "system",
-        "resumed after worker restart; runner still running",
+        'system',
+        'resumed after worker restart; runner still running',
       );
     }
 
@@ -505,7 +556,7 @@ export class JobService {
     await this.tryMirrorLogs(jobId, sandbox);
 
     const status = await this.readStatus(sandbox);
-    if (status?.phase === "completed" || status?.phase === "failed") {
+    if (status?.phase === 'completed' || status?.phase === 'failed') {
       await this.finalize(jobId, sandbox, status.phase);
       return;
     }
@@ -525,19 +576,19 @@ export class JobService {
       heartbeatTimeoutMs: policy.heartbeatTimeoutMs,
     });
 
-    if (health.kind === "stalled") {
+    if (health.kind === 'stalled') {
       await this.stopContainer(jobId);
-      await this.settle(jobId, "failed", health.reason);
+      await this.settle(jobId, 'failed', health.reason);
       return;
     }
 
-    if (health.kind === "unresponsive") {
+    if (health.kind === 'unresponsive') {
       // The runner's own stdout/stderr is the only thing that can say why it
       // died. We were holding it the whole time and not reading it — knowing a
       // great deal about the runner's internals while failing to report the one
       // thing anyone needs.
       const output =
-        (await sandbox.readFile(`${STATE_DIR}/runner.out`))?.trim() ?? "";
+        (await sandbox.readFile(`${STATE_DIR}/runner.out`))?.trim() ?? '';
 
       // A runner that wrote no status and printed nothing executed nothing, so
       // this is still the pre-runner window and a retry has no side effects.
@@ -551,7 +602,7 @@ export class JobService {
         const attempts = fresh.attempts + 1;
         this.log(
           jobId,
-          "system",
+          'system',
           `runner started and reported nothing (attempt ${attempts}); requeued`,
         );
         running.end(jobId);
@@ -575,17 +626,17 @@ export class JobService {
         ? `\nrunner output:\n${output.slice(-RUNNER_OUTPUT_TAIL)}`
         : launched
           ? ` The launcher ran at ${launched} but the runner printed nothing.`
-          : " No launch marker was written, so the start command itself may never have run.";
+          : ' No launch marker was written, so the start command itself may never have run.';
 
       await this.stopContainer(jobId);
-      await this.settle(jobId, "failed", `${health.reason}${detail}`);
+      await this.settle(jobId, 'failed', `${health.reason}${detail}`);
     }
   }
 
   private async readStatus(
     sandbox: SandboxSession,
   ): Promise<
-    { phase?: "completed" | "failed" | string; updatedAt?: number } | undefined
+    { phase?: 'completed' | 'failed' | string; updatedAt?: number } | undefined
   > {
     const raw = await sandbox.readFile(`${STATE_DIR}/status.json`);
     return raw
@@ -601,7 +652,7 @@ export class JobService {
     try {
       await this.mirrorLogs(jobId, sandbox);
     } catch (error) {
-      this.log(jobId, "system", `log mirroring failed: ${errorMessage(error)}`);
+      this.log(jobId, 'system', `log mirroring failed: ${errorMessage(error)}`);
       // Flush immediately: a buffered report of a logging failure is a report
       // that disappears exactly when it is needed.
       this.deps.logs.flush(jobId);
@@ -628,7 +679,7 @@ export class JobService {
     );
 
     let highest = job.logSeq;
-    for (const line of (tail.stdout ?? "").split("\n")) {
+    for (const line of (tail.stdout ?? '').split("\n")) {
       if (!line.trim()) continue;
       try {
         const entry = JSON.parse(line) as {
@@ -638,7 +689,7 @@ export class JobService {
         };
         highest = Math.max(highest, entry.seq);
 
-        if (entry.stream === "agent") {
+        if (entry.stream === 'agent') {
           // Raw agent events, interpreted by the same translator the ACP surface
           // uses. The container emits facts; meaning is assigned once.
           const translated = translateEvent(
@@ -646,7 +697,7 @@ export class JobService {
           );
           for (const update of translated.updates) {
             const rendered = describeUpdate(update);
-            if (rendered) this.log(jobId, "stdout", rendered);
+            if (rendered) this.log(jobId, 'stdout', rendered);
           }
           if (
             translated.usage ||
@@ -663,7 +714,7 @@ export class JobService {
           continue;
         }
 
-        this.log(jobId, entry.stream as LogLine["stream"], entry.line);
+        this.log(jobId, entry.stream as LogLine['stream'], entry.line);
       } catch {
         // A partially written final line; it arrives complete next poll.
       }
@@ -690,7 +741,7 @@ export class JobService {
   private async finalize(
     jobId: string,
     sandbox: SandboxSession,
-    phase: "completed" | "failed",
+    phase: 'completed' | 'failed',
   ): Promise<void> {
     const { artifacts, redact } = this.deps;
 
@@ -700,7 +751,7 @@ export class JobService {
     await this.tryMirrorLogs(jobId, sandbox);
 
     const resultRaw = await sandbox.readFile(`${STATE_DIR}/result.json`);
-    const patchRaw = (await sandbox.readFile(`${STATE_DIR}/patch.diff`)) ?? "";
+    const patchRaw = (await sandbox.readFile(`${STATE_DIR}/patch.diff`)) ?? '';
 
     // Second redaction layer. The container cannot do value-based redaction —
     // it does not hold the secrets (ADR 0002) — so it happens here.
@@ -729,11 +780,11 @@ export class JobService {
 
     await this.settle(
       jobId,
-      phase === "completed" ? "completed" : "failed",
+      phase === 'completed' ? 'completed' : 'failed',
       error,
       result,
     );
-    if (phase === "completed") await this.tryOpenPullRequest(jobId);
+    if (phase === 'completed') await this.tryOpenPullRequest(jobId);
   }
 
   /**
@@ -751,7 +802,7 @@ export class JobService {
 
     const record = job.toRecord();
     if (!record.result?.pushed) {
-      this.log(jobId, "system", "no pull request: nothing was pushed");
+      this.log(jobId, 'system', 'no pull request: nothing was pushed');
       logs.flush(jobId);
       return;
     }
@@ -769,11 +820,11 @@ export class JobService {
         current.recordPullRequest(url);
         jobs.save(current);
       }
-      this.log(jobId, "system", `pull request opened: ${url}`);
+      this.log(jobId, 'system', `pull request opened: ${url}`);
     } catch (error) {
       this.log(
         jobId,
-        "system",
+        'system',
         `pull request could not be opened: ${errorMessage(error)}. ` +
           `The branch ${record.branch} is pushed; open it by hand.`,
       );
@@ -783,7 +834,7 @@ export class JobService {
 
   private async settle(
     jobId: string,
-    status: "completed" | "failed" | "cancelled",
+    status: 'completed' | 'failed' | 'cancelled',
     error?: string,
     result?: JobResult,
   ): Promise<void> {
@@ -793,7 +844,7 @@ export class JobService {
     const reason = error ? redact(error) : undefined;
     if (job?.settle(status, clock.now(), { error: reason, result })) {
       jobs.save(job);
-      this.log(jobId, "system", `job ${status}${reason ? `: ${reason}` : ""}`);
+      this.log(jobId, 'system', `job ${status}${reason ? `: ${reason}` : ''}`);
     }
 
     logs.flush(jobId);
@@ -843,7 +894,7 @@ export class JobService {
     } catch (error) {
       this.log(
         jobId,
-        "system",
+        'system',
         `the workspace could not be kept: ${errorMessage(error)}`,
       );
       this.deps.logs.flush(jobId);
@@ -885,9 +936,9 @@ export class JobService {
     if (usage) {
       this.log(
         jobId,
-        "system",
+        'system',
         `usage: ${usage.inputTokens} in / ${usage.outputTokens} out` +
-          (usage.turns ? `, ${usage.turns} turns` : ""),
+          (usage.turns ? `, ${usage.turns} turns` : ''),
       );
     }
   }
@@ -914,7 +965,7 @@ export class JobService {
     }
 
     ledger.markDestroyed(sandboxId, clock.now());
-    this.log(jobId, "system", "sandbox destroyed");
+    this.log(jobId, 'system', 'sandbox destroyed');
 
     const job = jobs.load(jobId);
     if (job) {
@@ -962,7 +1013,7 @@ export class JobService {
     }
   }
 
-  private log(jobId: string, stream: LogLine["stream"], line: string): void {
+  private log(jobId: string, stream: LogLine['stream'], line: string): void {
     this.deps.logs.append(jobId, stream, line);
   }
 }

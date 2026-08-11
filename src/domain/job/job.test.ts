@@ -189,3 +189,69 @@ describe('round-tripping through storage', () => {
     expect(restored.isTerminal).toBe(false);
   });
 });
+
+describe('continuing a job', () => {
+  function finished(overrides: Partial<ReturnType<Job['toRecord']>> = {}): Job {
+    const job = Job.create({ ...BASE, options: { push: true } });
+    job.start(2_000);
+    job.recordClaudeSession('conv-1');
+    job.settle('completed', 9_000, { result: result() });
+    const record = { ...job.toRecord(), workspace: { provider: 'fake', id: 'snap-1' }, ...overrides };
+    return Job.fromRecord(record);
+  }
+
+  const input = { id: 'next-1', prompt: 'use the JobClient interface', now: 20_000 };
+
+  test('carries on the same branch, so one diff keeps growing', () => {
+    const next = Job.continuing(finished(), input);
+
+    expect(next.branch).toBe('claude/m8x2k1-ab12cd34');
+    expect(next.repo).toBe(BASE.repo);
+    expect(next.baseBranch).toBe('main');
+    expect(next.toRecord().prompt).toBe('use the JobClient interface');
+  });
+
+  test('restores the workspace and resumes the conversation', () => {
+    const next = Job.continuing(finished(), input);
+
+    expect(next.restoreFrom).toEqual({ provider: 'fake', id: 'snap-1' });
+    expect(next.resumeSession).toBe('conv-1');
+    expect(next.continues).toBe('m8x2k1-ab12cd34');
+  });
+
+  test('inherits the options and commands, and lets this turn override them', () => {
+    const previous = Job.fromRecord({
+      ...finished().toRecord(),
+      commands: { install: 'npm ci', test: 'npm test' },
+    });
+
+    const next = Job.continuing(previous, { ...input, commands: { test: 'npm test -- --run' } });
+
+    expect(next.options.push).toBe(true);
+    expect(next.commandOverrides).toEqual({ install: 'npm ci', test: 'npm test -- --run' });
+  });
+
+  test('refuses a job that has not finished', () => {
+    const running = Job.create(BASE);
+    running.start(2_000);
+    running.markRunning();
+
+    expect(() => Job.continuing(running, input)).toThrow(/only be continued once it has finished/);
+  });
+
+  // Without it there is nothing to continue from, and a fresh clone would look
+  // like continuing while behaving like starting over.
+  test('refuses when no workspace was kept', () => {
+    expect(() => Job.continuing(finished({ workspace: undefined }), input)).toThrow(
+      /kept no workspace/
+    );
+  });
+
+  // The case that produces this: a job that failed at install, before the agent
+  // ever ran. There is a tree, but no conversation and no work in it.
+  test('refuses when there is no conversation to resume', () => {
+    expect(() => Job.continuing(finished({ claudeSessionId: undefined }), input)).toThrow(
+      /never started a conversation/
+    );
+  });
+});

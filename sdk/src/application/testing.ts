@@ -7,7 +7,14 @@
  * executor and a few minutes of waiting.
  */
 
-import type { JobRecord, JobSummary, LogLine, LogPage, StartJob } from '../domain/job.js';
+import type {
+  ContinueJob,
+  JobRecord,
+  JobSummary,
+  LogLine,
+  LogPage,
+  StartJob,
+} from '../domain/job.js';
 import type { AuthProbe, JobGateway, SandboxLedger } from './ports.js';
 
 export class FakeJobGateway implements JobGateway {
@@ -20,6 +27,7 @@ export class FakeJobGateway implements JobGateway {
 
   readonly calls: string[] = [];
   created: StartJob | null = null;
+  readonly continued: Array<{ jobId: string; input: ContinueJob }> = [];
   cancelled: string[] = [];
   diff: string | null = null;
 
@@ -38,6 +46,12 @@ export class FakeJobGateway implements JobGateway {
   async create(input: StartJob): Promise<JobRecord> {
     this.calls.push('create');
     this.created = input;
+    return this.states[0] as JobRecord;
+  }
+
+  async continue(jobId: string, input: ContinueJob): Promise<JobRecord> {
+    this.calls.push('continue');
+    this.continued.push({ jobId, input });
     return this.states[0] as JobRecord;
   }
 

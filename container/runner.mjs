@@ -301,7 +301,13 @@ async function main() {
 
   await run('git-config', `git -C ${REPO_DIR} config user.name ${shellQuote(GIT_USER_NAME)}`);
   await run('git-config-email', `git -C ${REPO_DIR} config user.email ${shellQuote(GIT_USER_EMAIL)}`);
-  await run('git-branch', `git -C ${REPO_DIR} checkout -b ${shellQuote(job.branch)}`);
+  // `-b` fails when the branch is already there, which is exactly the case on a
+  // follow-up turn: the restored workspace is still standing on it.
+  await run(
+    'git-branch',
+    `git -C ${REPO_DIR} checkout ${shellQuote(job.branch)} 2>/dev/null || ` +
+      `git -C ${REPO_DIR} checkout -b ${shellQuote(job.branch)}`
+  );
 
   setStatus('installing');
   if (commands.install) await run('install', commands.install, { timeoutMs: job.stepTimeoutMs });
@@ -314,6 +320,9 @@ async function main() {
       'unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN;',
       'claude -p',
       shellQuote(job.prompt),
+      // A follow-up turn carries on the conversation the previous one had, which
+      // is the difference between answering a question and being asked it again.
+      ...(job.resumeSession ? ['--resume', shellQuote(job.resumeSession)] : []),
       // Streamed rather than buffered. Without this nothing is emitted until
       // the whole step finishes, so a job that is working and a job that is
       // stuck look identical for minutes at a time.

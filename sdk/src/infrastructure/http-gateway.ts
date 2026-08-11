@@ -1,7 +1,7 @@
 import type { JobGateway } from '../application/ports.js';
 import { normaliseUrl } from '../domain/endpoint.js';
 import type { AuthProbe, SandboxLedger } from '../domain/executor.js';
-import type { JobRecord, JobSummary, LogPage, StartJob } from '../domain/job.js';
+import type { ContinueJob, JobRecord, JobSummary, LogPage, StartJob } from '../domain/job.js';
 import { ExecutorError } from './errors.js';
 
 export interface ExecutorConfig {
@@ -71,6 +71,14 @@ export class HttpJobGateway implements JobGateway {
     });
     // Older executors name the id `jobId` in this response only. Normalised here
     // so callers never have to know that.
+    return { ...body, id: body.id ?? (body.jobId as string) };
+  }
+
+  async continue(jobId: string, input: ContinueJob): Promise<JobRecord> {
+    const body = await this.call<JobRecord & { jobId?: string }>(
+      `/jobs/${encodeURIComponent(jobId)}/continue`,
+      { method: 'POST', body: JSON.stringify(input) }
+    );
     return { ...body, id: body.id ?? (body.jobId as string) };
   }
 
