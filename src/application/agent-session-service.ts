@@ -7,6 +7,7 @@ import {
 } from '../domain/agent/acp';
 import { buildClaudeCommand } from '../domain/agent/command';
 import { sanitizeRef } from '../domain/job/branch';
+import { Refusal } from '../domain/job/errors';
 import { resolveRepository } from '../domain/job/repository';
 import type {
   Background,
@@ -77,7 +78,7 @@ export class AgentSessionService {
 
   /** `session/prompt`. Returns immediately; the turn streams over the update sink. */
   async prompt(sessionId: string, text: string): Promise<{ accepted: true }> {
-    if (this.turn) throw new Error('a turn is already in flight for this session');
+    if (this.turn) throw new Refusal('a turn is already in flight for this session');
 
     const controller = new AbortController();
     this.turn = controller;

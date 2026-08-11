@@ -63,7 +63,7 @@ let inflight: Promise<string> | null = null;
 export async function getInstallationToken(env: Env): Promise<string> {
   const config = loadGitHubAppConfig(env);
   if (!config) {
-    throw new Error(
+    throw new Refusal(
       'GitHub App is not configured: set GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY and ' +
         'GITHUB_APP_INSTALLATION_ID (see docs/operating.md, "A GitHub App").'
     );
@@ -310,7 +310,7 @@ async function importPrivateKey(pem: string): Promise<CryptoKey> {
   try {
     der = Uint8Array.from(atob(body), (c) => c.charCodeAt(0));
   } catch {
-    throw new Error('GITHUB_APP_PRIVATE_KEY is not valid base64 PEM content');
+    throw new Refusal('GITHUB_APP_PRIVATE_KEY is not valid base64 PEM content');
   }
 
   try {
@@ -322,7 +322,7 @@ async function importPrivateKey(pem: string): Promise<CryptoKey> {
       ['sign']
     );
   } catch {
-    throw new Error(
+    throw new Refusal(
       'failed to import GITHUB_APP_PRIVATE_KEY. GitHub issues App keys as PKCS#1 ' +
         '("-----BEGIN RSA PRIVATE KEY-----"), but this runtime requires PKCS#8. Convert it once with: ' +
         'openssl pkcs8 -topk8 -nocrypt -in original-key.pem -out pkcs8-key.pem, then store the ' +

@@ -1,5 +1,6 @@
 import { CloudflareSandboxProvider } from './cloudflare';
 import type { SandboxProvider } from '../../application/ports/sandbox';
+import { Refusal } from '../../domain/job/errors';
 import type { Env } from '../env';
 
 export type {
@@ -28,8 +29,6 @@ export function getSandboxProvider(env: Env): SandboxProvider {
     case 'cloudflare':
       return new CloudflareSandboxProvider(env, env.BACKUP_BUCKET);
     default:
-      throw new Error(
-        `unknown SANDBOX_PROVIDER "${requested}" (supported: cloudflare)`
-      );
+      throw new Refusal(`unknown SANDBOX_PROVIDER "${requested}" (supported: cloudflare)`);
   }
 }
