@@ -228,6 +228,9 @@ snapshot は settle 時・teardown の前に取り、TTL はジョブ記録の�
 - `ALLOW_PUSH` が読まれるだけで参照されない → 対応済み
 - workspace cache 系が一度も呼ばれない → RC-10（未決）。
   `BACKUP_BUCKET_NAME` と `CLOUDFLARE_ACCOUNT_ID` も `Env` にあるが誰も読まない。同じ決定に属する
+  → **どちらも Sandbox SDK が読んでいた。** workspace の持ち越し（ADR 0011）に両方必要で、
+  2つだと思って2つ入れたら足りなかった。**「誰も読まない」は「このリポジトリの中では読まない」だった** —
+  grep の範囲が結論の範囲になっていた
 - `SANDBOX_TRANSPORT` は誰も読んでいないように見えたが、**Sandbox SDK が読んでいた**（誤検知）
 - `max_instances` (3) と `MAX_CONCURRENCY` (3) は一致している ✅
 

@@ -206,23 +206,37 @@ over — see [ADR 0011](adr/0011-continue-a-job-rather-than-steer-it.md). That
 needs the tree it left and the conversation that produced it, so when a job
 settles its workspace is stored and the record points at it.
 
-**Two things, and no flag.** An R2 bucket bound as `BACKUP_BUCKET`, and the R2
-S3 credentials the container uploads with:
+**Four things, and no flag.** Storing a workspace uploads it from the container
+over a presigned URL, so the sandbox needs the bucket by name as well as by
+binding, and credentials of its own:
+
+| | |
+| --- | --- |
+| `BACKUP_BUCKET` | the binding, in `r2_buckets` |
+| `BACKUP_BUCKET_NAME` | the same bucket by name, in `vars` |
+| `CLOUDFLARE_ACCOUNT_ID` | a secret |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | secrets, from Dashboard → R2 → Manage API tokens |
 
 ```bash
-npx wrangler secret put R2_ACCESS_KEY_ID       # Dashboard → R2 → Manage API tokens
+npx wrangler r2 bucket create remote-claude-workspaces
+npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
+npx wrangler secret put R2_ACCESS_KEY_ID
 npx wrangler secret put R2_SECRET_ACCESS_KEY
 ```
 
-With both, workspaces are kept for as long as the job record is (seven days).
-With neither, jobs run exactly as before and simply cannot be continued. There is
-no separate on/off flag, because a flag and a binding can disagree — and the one
-that used to be here did, for as long as it existed.
+With all of them, workspaces are kept for as long as the job record is (seven
+days). With none, jobs run exactly as before and simply cannot be continued.
+There is no separate on/off flag, because a flag and a binding can disagree — and
+the one that used to be here did, for as long as it existed.
 
-The credentials are easy to miss: the bucket alone looks like enough, and the
-first continuation attempted on this deployment was refused with "kept no
-workspace" because of it. A failure to store a workspace is now reported in the
-job's log rather than swallowed.
+Two of those four are read by the sandbox SDK rather than by this Worker, which
+is why they can look unused when you grep for them. A sweep for dead
+configuration flagged both as suspicious and left them alone; they turned out to
+be exactly what this feature needs.
+
+Getting it wrong is quiet in the wrong way: a job runs perfectly, keeps no
+workspace, and the refusal arrives later when somebody tries to continue it. The
+job's log now names what was missing at the moment it failed.
 
 This deployment has one. Another would need:
 

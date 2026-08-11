@@ -89,9 +89,15 @@ snapshot が失敗していた。そして**失敗した理由はどこにも残
 
 分かった事実を2つ記録する。
 
-1. **presigned upload に `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` が要る。**
-   バインディングだけでは足りない（Sandbox SDK は container から presigned URL で直接 R2 へ上げる）。
-   バケットが「唯一のスイッチ」と書いたが、正確には**バケット + その2つの secret**。
+1. **presigned upload に4つ要る。** バインディングだけでは足りない（Sandbox SDK は container から
+   presigned URL で直接 R2 へ上げる）。`BACKUP_BUCKET`（binding）+ `BACKUP_BUCKET_NAME`（var）+
+   `CLOUDFLARE_ACCOUNT_ID` + `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`。
+   **2つだと思って2つ入れ、まだ足りなかった。** エラーは4つ全部を名指ししていて、
+   それが読めたのは例外を飲むのをやめた直後だった。
+
+   そして足りなかった2つは、**直前の棚卸しで「宣言されているが誰も読まない」と印を付けた**
+   `CLOUDFLARE_ACCOUNT_ID` と `BACKUP_BUCKET_NAME` だった。読んでいたのは SDK 側。
+   **「誰も読まない」は「このリポジトリの中では読まない」だった。**
 
 2. **`gitignore` オプションは、対象ディレクトリが git repo の中にある場合だけ効く。**
    `/workspace` は repo ではない（repo は `/workspace/repo`）ので、
