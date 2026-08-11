@@ -1,7 +1,8 @@
-import { Refusal } from './domain/job/errors';
 import { createRedactor } from './domain/redaction/redactor';
 import type { Env } from './infrastructure/env';
 import { maskedSecrets } from './infrastructure/secrets';
+import { probeClaudeAuth } from './infrastructure/health/claude-auth';
+import { toErrorResponse } from './interface/http/errors';
 import { route } from './interface/http/router';
 
 /**
@@ -32,15 +33,9 @@ export default {
     const redact = createRedactor(maskedSecrets(env));
 
     try {
-      return await route(request, env);
+      return await route(request, env, { probeClaudeAuth });
     } catch (error) {
-      const message = redact(error instanceof Error ? error.message : String(error));
-      // A refusal says so for itself. This used to be guessed from the wording,
-      // which meant every new refusal had to remember to contain one of a list of
-      // words — and the ones that forgot reported a caller's mistake as a server
-      // error.
-      const status = error instanceof Refusal ? 400 : 500;
-      return Response.json({ error: message }, { status });
+      return toErrorResponse(error, redact);
     }
   },
 } satisfies ExportedHandler<Env>;
