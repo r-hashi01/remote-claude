@@ -1,5 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
-import { JobService, SWEEP_INTERVAL_MS } from '../../application/job-service';
+import {
+  JobService,
+  SWEEP_INTERVAL_MS,
+  type ContinueRequest,
+} from '../../application/job-service';
 import { claudeProcessEnvironment } from '../../domain/agent/environment';
 import type { JobRecord, JobRequest, JobSummary, LogLine } from '../../domain/job/record';
 import type { SandboxLedger } from '../../domain/sandbox/ledger';
@@ -117,6 +121,11 @@ export class JobManager extends DurableObject<Env> {
 
   async getPatch(id: string): Promise<string | null> {
     return this.service.getPatch(id);
+  }
+
+  /** A follow-up turn on a finished job. Returns the new job. */
+  async continueJob(previousId: string, request: ContinueRequest): Promise<JobRecord> {
+    return (await this.service.continueJob(previousId, request)).toRecord();
   }
 
   async cancelJob(id: string): Promise<JobRecord | null> {

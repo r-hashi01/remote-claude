@@ -18,7 +18,7 @@
 
 import { waitForJob, type WaitOptions } from './application/wait-for-job.js';
 import type { AuthProbe, SandboxLedger } from './domain/executor.js';
-import type { JobRecord, JobSummary, LogPage, StartJob } from './domain/job.js';
+import type { ContinueJob, JobRecord, JobSummary, LogPage, StartJob } from './domain/job.js';
 import { HttpJobGateway, type ExecutorConfig } from './infrastructure/http-gateway.js';
 
 export * from './domain/job.js';
@@ -42,6 +42,8 @@ export function createClient(config: ExecutorConfig) {
     health: () => gateway.ping(),
     checkAuth: () => gateway.checkAuth(),
     startJob: (input: StartJob) => gateway.create(input),
+    /** A follow-up turn on a finished job: same branch, same conversation. */
+    continueJob: (jobId: string, input: ContinueJob) => gateway.continue(jobId, input),
     getJob: (jobId: string) => gateway.get(jobId),
     listJobs: (limit = 20) => gateway.list(limit),
     cancelJob: (jobId: string) => gateway.cancel(jobId),
@@ -79,6 +81,21 @@ export function checkAuth(config: ExecutorConfig): Promise<AuthProbe> {
  */
 export function startJob(config: ExecutorConfig, input: StartJob): Promise<JobRecord> {
   return new HttpJobGateway(config).create(input);
+}
+
+/**
+ * A follow-up turn on a finished job.
+ *
+ * For the case a one-shot job cannot handle: the agent stopped to ask something.
+ * The turn restores that job's workspace and resumes its conversation, so the
+ * answer lands where the question was asked rather than at the start.
+ */
+export function continueJob(
+  config: ExecutorConfig,
+  jobId: string,
+  input: ContinueJob
+): Promise<JobRecord> {
+  return new HttpJobGateway(config).continue(jobId, input);
 }
 
 export function getJob(config: ExecutorConfig, jobId: string): Promise<JobRecord> {

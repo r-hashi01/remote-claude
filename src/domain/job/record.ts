@@ -151,6 +151,10 @@ export interface JobRecord {
   workspace?: WorkspaceRef;
   /** The workspace this job started from, when it continues another. */
   restoreFrom?: WorkspaceRef;
+  /** The job this one continues. */
+  continues?: string;
+  /** The conversation this job resumes, rather than starting a new one. */
+  resumeSession?: string;
   /**
    * The pull request this job opened.
    *

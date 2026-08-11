@@ -77,6 +77,7 @@ await rc.listJobs(1); // /health is unauthenticated, so this is what proves the 
 | `listJobs(limit?)` | Recent jobs, newest first, without step output |
 | `getLogs(id, since?)` | One page of logs; feed `nextSince` back in |
 | `getDiff(id)` | The patch, or `null` while there is not one |
+| `continueJob(id, input)` | A follow-up turn on a finished job: same branch, same conversation |
 | `cancelJob(id)` | Ask the executor to stop |
 | `waitForJob(id, opts?)` | Poll until it finishes |
 | `checkAuth()` | Whether Claude Code on that deployment can authenticate |

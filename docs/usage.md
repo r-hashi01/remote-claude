@@ -182,6 +182,34 @@ Both need the deployment to allow pushing *and* the credential to permit it; see
 [Operating it](operating.md#pushing-and-pull-requests). Missing either is a 400
 at submission, naming which one.
 
+## Continuing a job
+
+A job runs once and cannot be steered while it runs. What it can do is stop and
+ask — which is the right behaviour when the answer changes what should be built —
+and the answer goes back as a follow-up turn:
+
+```bash
+curl -X POST .../jobs/<job-id>/continue -d '{"prompt": "use the interface stub"}'
+```
+
+```ts
+const next = await rc.continueJob(job.id, { prompt: 'use the interface stub' });
+```
+
+The turn **restores that job's workspace and resumes its conversation**, and runs
+on **the same branch**, so the diff keeps growing in one place and a pull request
+opened for it stays the right one. Only the prompt is required; the repository,
+base, branch and commands are inherited, and the job options override rather than
+reset ([ADR 0011](adr/0011-continue-a-job-rather-than-steer-it.md)).
+
+It is refused, rather than quietly turned into a fresh start, when:
+
+| | |
+| --- | --- |
+| the job has not finished | there is no stored workspace yet |
+| the deployment kept no workspace | no bucket is bound, or it has expired — they live as long as the job record |
+| the job never started a conversation | it stopped before the agent ran. Submit a new job instead |
+
 ## Another repository
 
 A deployment has one configured repository and will work on others when
@@ -280,6 +308,7 @@ Every call needs `Authorization: Bearer $REMOTE_CLAUDE_TOKEN` except `/health`.
 | `GET` | `/jobs/:id` | One job, including `result` and `usage` |
 | `GET` | `/jobs/:id/logs?since=<seq>` | Logs. `format=text` for plain text |
 | `GET` | `/jobs/:id/diff` | The patch, or `404` while there is none |
+| `POST` | `/jobs/:id/continue` | A follow-up turn: same branch, same workspace, same conversation |
 | `POST` | `/jobs/:id/cancel` | Cancel |
 | `GET` | `/sandboxes` | What this deployment allocated, and whether it got it back |
 | `GET` | `/health` | Unauthenticated liveness |

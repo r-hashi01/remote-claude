@@ -123,6 +123,13 @@ export interface JobRecord {
   /** What this job asked for, if it asked for a pull request. */
   pullRequest?: PullRequestRequest;
   /**
+   * The job this one continues, when it is a follow-up turn.
+   *
+   * A continuation runs on the same branch as the job it continues, so the diff
+   * and any pull request keep growing in one place.
+   */
+  continues?: string;
+  /**
    * The pull request the executor opened.
    *
    * Absent when none was asked for, or when opening one failed — the branch is
@@ -183,6 +190,23 @@ export interface StartJob {
    * ran, not the agent's account of itself. A caller that knows which work item
    * this was should override them.
    */
+  pullRequest?: PullRequestRequest;
+}
+
+/**
+ * A follow-up turn on a finished job.
+ *
+ * Only the prompt is required — the answer to whatever the previous turn stopped
+ * for. Everything else is inherited from the job being continued: the
+ * repository, the base, the branch, and the commands. The options here override
+ * that job's, rather than resetting them.
+ */
+export interface ContinueJob {
+  prompt: string;
+  skipChecks?: boolean;
+  keepSandbox?: boolean;
+  push?: boolean;
+  commands?: Partial<JobCommands>;
   pullRequest?: PullRequestRequest;
 }
 
