@@ -215,6 +215,11 @@ export class Job {
     return this.record.lastProgressAt;
   }
 
+  /** The last phase seen, which outlives the file it was read from. */
+  get phase(): string | undefined {
+    return this.record.phase;
+  }
+
   get finishedAt(): number | undefined {
     return this.record.finishedAt;
   }
@@ -255,6 +260,11 @@ export class Job {
   recordProgress(now: number, logSeq: number): void {
     this.record.logSeq = logSeq;
     this.record.lastProgressAt = now;
+  }
+
+  /** Kept so a failure can name where the job was, once nothing can be read. */
+  recordPhase(phase: string): void {
+    this.record.phase = phase;
   }
 
   /** Recorded as it arrives, so a job that later fails still reports it. */

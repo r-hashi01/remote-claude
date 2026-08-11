@@ -19,7 +19,9 @@ import type {
 import { composePullRequest } from '../domain/job/pull-request';
 import { resolveRepository } from '../domain/job/repository';
 import {
+  isTransientPlatformError,
   shouldRetryLaunch,
+  shouldRetryLostContainer,
   shouldRetrySilentStartup,
 } from '../domain/job/retry';
 import {
@@ -558,12 +560,21 @@ export class JobService {
     // before the status read with nothing catching it, so one failure in the log
     // path left the job polling until it hit its timeout — a job lost to a
     // problem with reporting on the job.
-    await this.tryMirrorLogs(jobId, sandbox);
+    const platformInterrupted = await this.tryMirrorLogs(jobId, sandbox);
 
     const status = await this.readStatus(sandbox);
     if (status?.phase === 'completed' || status?.phase === 'failed') {
       await this.finalize(jobId, sandbox, status.phase);
       return;
+    }
+
+    // Remember it while it can still be read. See JobRecord.phase.
+    if (status?.phase && status.phase !== job.phase) {
+      const seen = jobs.load(jobId);
+      if (seen) {
+        seen.recordPhase(status.phase);
+        jobs.save(seen);
+      }
     }
 
     // Re-read before judging liveness. `job` above was loaded before mirroring,
@@ -576,7 +587,7 @@ export class JobService {
       startedAt: fresh.startedAt,
       lastProgressAt: fresh.lastProgressAt,
       heartbeatAt: status?.updatedAt,
-      phase: status?.phase,
+      phase: status?.phase ?? fresh.phase,
       stallTimeoutMs: policy.stallTimeoutMs,
       heartbeatTimeoutMs: policy.heartbeatTimeoutMs,
     });
@@ -594,14 +605,30 @@ export class JobService {
       // thing anyone needs.
       // Asked of the platform that is holding the process, rather than read out
       // of a file the runner may never have opened.
-      const runner = await sandbox.findProcess(runnerProcessId(jobId));
-      const output = ((await runner?.output()) ?? '').trim();
+      // A container that has gone away can fail this question rather than
+      // answer it. Failing to find the process and being told there is none mean
+      // the same thing here, and the wording of the failure says which happened.
+      let runner: Awaited<ReturnType<SandboxSession['findProcess']>> = null;
+      let output = '';
+      let lookupInterrupted = false;
+      try {
+        runner = await sandbox.findProcess(runnerProcessId(jobId));
+        output = ((await runner?.output()) ?? '').trim();
+      } catch (error) {
+        const message = errorMessage(error);
+        this.log(jobId, 'system', `asking after the runner failed: ${message}`);
+        lookupInterrupted = isTransientPlatformError(message);
+      }
 
       // A runner that wrote no status and printed nothing executed nothing, so
       // this is still the pre-runner window and a retry has no side effects.
       if (
         shouldRetrySilentStartup({
-          runnerReportedStatus: status !== undefined,
+          // "Has it ever reported one", not "can one be read right now". Read
+          // freshly, a job whose container had just been taken away looked like a
+          // runner that never started — the same mistake as judging liveness from
+          // a single unreadable status file, in the rule right next to it.
+          runnerReportedStatus: status !== undefined || fresh.phase !== undefined,
           // Anything mirrored means the runner ran. This is read from the job
           // rather than inferred from files that may be momentarily unreadable.
           producedOutput: fresh.logSeq > 0,
@@ -609,30 +636,45 @@ export class JobService {
           attemptsSoFar: fresh.attempts,
         })
       ) {
-        const attempts = fresh.attempts + 1;
-        this.log(
+        await this.requeueForRetry(
           jobId,
-          'system',
-          `runner started and reported nothing (attempt ${attempts}); requeued`,
+          fresh.attempts + 1,
+          'runner started and reported nothing',
         );
-        running.end(jobId);
-        await this.teardown(jobId);
-        const current = jobs.load(jobId);
-        if (current) {
-          current.requeue({ attempts });
-          jobs.save(current);
-        }
+        return;
+      }
+
+      // The container itself was taken away, taking the workspace with it. The
+      // job had run, which every other retry rule here treats as disqualifying —
+      // and rightly, except when nothing of what ran survived.
+      if (
+        shouldRetryLostContainer({
+          platformInterrupted: platformInterrupted || lookupInterrupted,
+          runnerProcessMissing: runner === null,
+          lastKnownPhase: status?.phase ?? fresh.phase,
+          attemptsSoFar: fresh.attempts,
+        })
+      ) {
+        await this.requeueForRetry(
+          jobId,
+          fresh.attempts + 1,
+          'the platform took the container away mid-run',
+        );
         return;
       }
 
       // A process the platform has never heard of and one it is holding are
       // different failures. Guessing between them is what the marker file was
-      // for; now the answer is a question away.
+      // for; now the answer is a question away. And a runner with output behind
+      // it did start, whatever the platform remembers — saying otherwise put a
+      // claim in the error that the log directly above it contradicted.
       const detail = output
         ? `\nrunner output:\n${output.slice(-RUNNER_OUTPUT_TAIL)}`
-        : runner === null
-          ? ' The platform has no record of the runner process, so it never started.'
-          : ' The runner process is still there and has printed nothing at all.';
+        : runner !== null
+          ? ' The runner process is still there and has printed nothing at all.'
+          : fresh.logSeq > 0
+            ? ' The platform is no longer holding the runner process, so it is gone rather than stuck.'
+            : ' The platform has no record of the runner process, so it never started.';
 
       await this.stopContainer(jobId);
       await this.settle(jobId, 'failed', `${health.reason}${detail}`);
@@ -650,18 +692,44 @@ export class JobService {
       : undefined;
   }
 
-  /** Mirror logs, surfacing any failure without letting it stall the job. */
+  /** Give up the job for another attempt, taking its sandbox down with it. */
+  private async requeueForRetry(
+    jobId: string,
+    attempts: number,
+    reason: string,
+  ): Promise<void> {
+    this.log(jobId, 'system', `${reason} (attempt ${attempts}); requeued`);
+    this.deps.running.end(jobId);
+    await this.teardown(jobId);
+    const current = this.deps.jobs.load(jobId);
+    if (current) {
+      current.requeue({ attempts });
+      this.deps.jobs.save(current);
+    }
+  }
+
+  /**
+   * Mirror logs, surfacing any failure without letting it stall the job.
+   *
+   * Returns whether the failure was the platform's rather than this job's. That
+   * is the first thing to notice a container being taken away — the poll after
+   * it cannot read a status file either, and would otherwise report the silence
+   * without the reason for it.
+   */
   private async tryMirrorLogs(
     jobId: string,
     sandbox: SandboxSession,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.mirrorLogs(jobId, sandbox);
+      return false;
     } catch (error) {
-      this.log(jobId, 'system', `log mirroring failed: ${errorMessage(error)}`);
+      const message = errorMessage(error);
+      this.log(jobId, 'system', `log mirroring failed: ${message}`);
       // Flush immediately: a buffered report of a logging failure is a report
       // that disappears exactly when it is needed.
       this.deps.logs.flush(jobId);
+      return isTransientPlatformError(message);
     }
   }
 

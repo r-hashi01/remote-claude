@@ -508,6 +508,82 @@ describe('following a running job', () => {
     expect(h.sandboxes.get(`rc-${h.jobId}`).destroyed).toBe(true);
   });
 
+  // A real job: install ran for 24 seconds, the agent step started, and then the
+  // container went away twelve seconds after a deploy — every call into it failed
+  // with a platform interruption and the runner process was no longer held. The
+  // container takes the whole workspace with it, so there is nothing half-done to
+  // protect and a fresh attempt is the only thing that helps.
+  test('requeues a job whose container the platform took away mid-run', async () => {
+    const h = await started();
+    const sandbox = h.sandboxes.get(`rc-${h.jobId}`);
+    sandbox.files.set(
+      `${STATE_DIR}/log.ndjson`,
+      `${JSON.stringify({ seq: 1, ts: h.clock.now(), stream: 'system', line: '✔ install' })}\n`
+    );
+    await h.service.tick();
+    expect(h.jobs.load(h.jobId)?.logSeq).toBe(1);
+
+    // From here the container is unreachable and the platform holds no process.
+    sandbox.processes.delete(`runner-${h.jobId}`);
+    sandbox.execError =
+      'Sandbox operation commands.execute was interrupted while the runtime connection was closing';
+    sandbox.files.delete(`${STATE_DIR}/status.json`);
+    h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
+    await h.service.tick();
+
+    const job = h.jobs.load(h.jobId);
+    expect(job?.status).toBe('queued');
+    expect(job?.attempts).toBe(1);
+    expect(h.logs.all(h.jobId).join('\n')).toMatch(/took the container away/i);
+  });
+
+  // The status file is unreadable in exactly the case where knowing where the job
+  // died matters most, and falling back to "startup" then reports the one place
+  // it certainly was not. The last phase actually seen is remembered for this.
+  test('names the phase it last saw rather than presuming startup', async () => {
+    const h = await started();
+    const sandbox = h.sandboxes.get(`rc-${h.jobId}`);
+    sandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({ phase: 'checking', updatedAt: h.clock.now() })
+    );
+    await h.service.tick();
+
+    sandbox.files.delete(`${STATE_DIR}/status.json`);
+    sandbox.setProcess(`runner-${h.jobId}`, { alive: true, output: '' });
+    h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
+    await h.service.tick();
+
+    const job = h.jobs.load(h.jobId);
+    expect(job?.status).toBe('failed');
+    expect(job?.error).toMatch(/during "checking"/);
+    expect(job?.error).not.toMatch(/startup/);
+  });
+
+  // "It never started" was printed for a job that had run a 24 second install.
+  // A claim contradicted by the log above it costs the reader the time it takes
+  // to work out which half to believe.
+  test('does not claim a runner never started when it had already produced output', async () => {
+    const h = await started();
+    const sandbox = h.sandboxes.get(`rc-${h.jobId}`);
+    sandbox.files.set(
+      `${STATE_DIR}/log.ndjson`,
+      `${JSON.stringify({ seq: 1, ts: h.clock.now(), stream: 'system', line: '✔ install' })}\n`
+    );
+    await h.service.tick();
+
+    // Gone from the platform, but nothing says the platform was at fault — so
+    // this is a failure, and the wording is all that is under test.
+    sandbox.processes.delete(`runner-${h.jobId}`);
+    h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
+    await h.service.tick();
+
+    const job = h.jobs.load(h.jobId);
+    expect(job?.status).toBe('failed');
+    expect(job?.error).not.toMatch(/never started/);
+    expect(job?.error).toMatch(/no longer holding/);
+  });
+
   test('a runner that printed something is failed, not retried', async () => {
     const h = await started();
     // One line of output means something may have run, so this is not the
