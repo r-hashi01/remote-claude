@@ -436,6 +436,9 @@ describe('following a running job', () => {
     expect(job?.result?.steps.map((step) => step.name)).toEqual(['verify-no-api-key', 'install']);
     expect(job?.result?.steps[1]?.command).toMatch(/npm --prefix/);
     expect(job?.result?.steps[1]?.output).toMatch(/EUSAGE/);
+    // The reason lives on the record. Leaving a copy inside `result` would put
+    // the same fact in two places, one of which no type describes.
+    expect(job?.result).not.toHaveProperty('error');
   });
 
   test('a job asked to keep its sandbox keeps it', async () => {

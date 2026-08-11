@@ -612,12 +612,19 @@ export class JobService {
     let result: JobResult | undefined;
     let error: string | undefined;
     if (resultRaw) {
-      const parsed = JSON.parse(redact(resultRaw)) as JobResult & { error?: string };
-      // Kept in both cases. A failure used to arrive as one line of `error` with
-      // the steps thrown away — so the one situation that needs to say which
-      // command ran and what it printed was the situation that said least.
+      const { error: reported, ...parsed } = JSON.parse(redact(resultRaw)) as JobResult & {
+        error?: string;
+      };
+      // The result is kept in both cases. A failure used to arrive as one line of
+      // `error` with the steps thrown away — so the one situation that needs to
+      // say which command ran and what it printed was the situation that said
+      // least.
+      //
+      // The reason itself is lifted out rather than left inside: the record has
+      // a place for it, and the same fact in two places is how one of them goes
+      // stale. The runner's own file keeps everything, in R2.
       result = parsed;
-      if (parsed.error) error = parsed.error;
+      if (reported) error = reported;
       await artifacts.putResult(jobId, redact(resultRaw));
     }
 
