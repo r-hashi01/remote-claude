@@ -613,8 +613,11 @@ export class JobService {
     let error: string | undefined;
     if (resultRaw) {
       const parsed = JSON.parse(redact(resultRaw)) as JobResult & { error?: string };
+      // Kept in both cases. A failure used to arrive as one line of `error` with
+      // the steps thrown away — so the one situation that needs to say which
+      // command ran and what it printed was the situation that said least.
+      result = parsed;
       if (parsed.error) error = parsed.error;
-      else result = parsed;
       await artifacts.putResult(jobId, redact(resultRaw));
     }
 

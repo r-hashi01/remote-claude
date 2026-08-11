@@ -257,8 +257,12 @@ function skip(name, reason) {
 
 // -------------------------------------------------------------- the job
 
+/** Remembered for the failure path, which reports outside main()'s scope. */
+let workBranch = null;
+
 async function main() {
   const job = JSON.parse(readFileSync(`${STATE_DIR}/job.json`, 'utf8'));
+  workBranch = job.branch ?? null;
   const { commands = {}, options = {} } = job;
 
   setStatus('preparing');
@@ -269,18 +273,31 @@ async function main() {
   // credentials injected outside the container, which is exactly what this
   // process must never see.
 
-  // Prove no API-key credential is present. `printenv` prints nothing and
-  // exits non-zero when the variables are unset.
-  const leak = await run('verify-no-api-key', 'printenv ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN', {
-    allowFailure: true,
-  });
-  if (leak.output.trim().length > 0) {
+  // Prove no API-key credential is present.
+  //
+  // This used to run `printenv ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN`, which
+  // exits 1 when the variables are unset — so the desired outcome was recorded
+  // as a failed step, and every healthy job reported one failure. The check was
+  // right and its record was wrong, which is worse than either: a reader who
+  // trusts the steps sees a problem that is not there, and one who learns to
+  // ignore that line will ignore it on the day it matters.
+  //
+  // Now the exit code means what the step means. Names are printed, never
+  // values.
+  const check = await run(
+    'verify-no-api-key',
+    'leaked=""; for v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; do ' +
+      '[ -n "${!v}" ] && leaked="$leaked $v"; done; ' +
+      'if [ -n "$leaked" ]; then echo "present:$leaked"; exit 1; fi; ' +
+      'echo "no API-key credential present"',
+    { allowFailure: true }
+  );
+  if (!check.success) {
     throw new Error(
       'ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN is set inside the container. ' +
         'Refusing to run: this environment must use subscription OAuth only.'
     );
   }
-  log('system', 'verified: no API-key credential present in the container');
 
   await run('git-config', `git -C ${REPO_DIR} config user.name ${shellQuote(GIT_USER_NAME)}`);
   await run('git-config-email', `git -C ${REPO_DIR} config user.email ${shellQuote(GIT_USER_EMAIL)}`);
@@ -391,8 +408,19 @@ main().catch((error) => {
   const message = redact(error instanceof Error ? error.message : String(error));
   log('system', `job failed: ${message}`);
   // The Worker distinguishes failure from "still running" by this file, so it
-  // must be written even on the paths that threw.
-  write('result.json', { error: message, steps, changed: false, branch: null });
+  // must be written even on the paths that threw — and with the same shape a
+  // success has, because the steps are the reason anyone opens a failed job.
+  write('result.json', {
+    error: message,
+    claudeOutput: '',
+    changed: false,
+    branch: workBranch,
+    pushed: false,
+    gitStatus: '',
+    diffStat: '',
+    diffBytes: 0,
+    steps,
+  });
   setStatus('failed', { error: message });
   process.exit(1);
 });
