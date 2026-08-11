@@ -112,6 +112,14 @@ export interface JobRecord {
   attempts?: number;
   /** When output last advanced. Progress, as distinct from liveness. */
   lastProgressAt?: number;
+  /**
+   * The last phase the runner was seen in.
+   *
+   * Remembered rather than read fresh, because the status file is unreadable in
+   * exactly the case where where-it-died matters most — the container is gone.
+   * Presuming "startup" then names the one place the job certainly was not.
+   */
+  phase?: string;
   /** What the agent consumed. Recorded as it arrives, so a failure keeps it. */
   usage?: JobUsage;
   /**

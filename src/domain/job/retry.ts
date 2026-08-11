@@ -70,6 +70,49 @@ export function shouldRetrySilentStartup(
   return input.attemptsSoFar + 1 < maxAttempts;
 }
 
+/**
+ * Phases from which a retry would repeat something the container did not keep.
+ *
+ * Everything up to the push happens inside the container and dies with it, so
+ * running it again costs time and nothing else. The push is the first step that
+ * leaves a mark somewhere that outlives the sandbox.
+ */
+const PHASES_THAT_REACH_OUTSIDE = new Set(['pushing']);
+
+export interface LostContainerInput {
+  /** Whether talking to the sandbox failed with a platform error this poll. */
+  platformInterrupted: boolean;
+  /** Whether the platform has stopped holding the runner process. */
+  runnerProcessMissing: boolean;
+  /** The last phase the runner was seen in, if it was ever seen in one. */
+  lastKnownPhase?: string;
+  attemptsSoFar: number;
+}
+
+/**
+ * A container the platform took away while the job was still using it.
+ *
+ * Distinct from every other retry rule here, which are all about the window
+ * before anything ran. This one deliberately retries a job that *had* run: the
+ * container is gone, and with it the workspace, the checkout and the agent's
+ * work, so there is no partial state to respect. Observed twelve seconds after a
+ * deploy, the container rollout draining the instance underneath a live job —
+ * the job's own doing in no part of it.
+ *
+ * Both conditions are required. A platform error alone could be a hiccup on one
+ * call; a missing process alone could be a runner that exited on its own, and
+ * its exit is worth reporting rather than papering over.
+ */
+export function shouldRetryLostContainer(
+  input: LostContainerInput,
+  maxAttempts: number = MAX_LAUNCH_ATTEMPTS
+): boolean {
+  if (!input.platformInterrupted) return false;
+  if (!input.runnerProcessMissing) return false;
+  if (input.lastKnownPhase && PHASES_THAT_REACH_OUTSIDE.has(input.lastKnownPhase)) return false;
+  return input.attemptsSoFar + 1 < maxAttempts;
+}
+
 export function shouldRetryLaunch(
   message: string,
   attemptsSoFar: number,

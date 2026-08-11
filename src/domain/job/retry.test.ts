@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { MAX_LAUNCH_ATTEMPTS, shouldRetryLaunch, shouldRetrySilentStartup } from './retry';
+import {
+  MAX_LAUNCH_ATTEMPTS,
+  shouldRetryLaunch,
+  shouldRetryLostContainer,
+  shouldRetrySilentStartup,
+} from './retry';
 
 describe('shouldRetryLaunch', () => {
   // Observed in normal use: the sandbox runtime is updated underneath a running
@@ -73,5 +78,49 @@ describe('shouldRetrySilentStartup', () => {
   test('shares the launch attempt budget', () => {
     expect(shouldRetrySilentStartup({ ...base, attemptsSoFar: MAX_LAUNCH_ATTEMPTS - 2 })).toBe(true);
     expect(shouldRetrySilentStartup({ ...base, attemptsSoFar: MAX_LAUNCH_ATTEMPTS - 1 })).toBe(false);
+  });
+});
+
+/**
+ * The case that motivated this: a job ran its install, entered its agent step,
+ * and then every call into the sandbox failed with "commands.execute was
+ * interrupted while the runtime connection was closing" while the platform no
+ * longer held the runner process. The container had been taken away — twelve
+ * seconds after a deploy, mid-rollout. The job was failed permanently for
+ * something that had nothing to do with the job.
+ */
+describe('shouldRetryLostContainer', () => {
+  const base = {
+    platformInterrupted: true,
+    runnerProcessMissing: true,
+    lastKnownPhase: 'running',
+    attemptsSoFar: 0,
+  };
+
+  test('retries a container the platform took away mid-run', () => {
+    expect(shouldRetryLostContainer(base)).toBe(true);
+  });
+
+  // The whole point is that the container is gone, so nothing survived to be
+  // half-done. A runner the platform is still holding is a different failure and
+  // re-running the prompt would not be a retry of anything.
+  test('does not retry a runner the platform is still holding', () => {
+    expect(shouldRetryLostContainer({ ...base, runnerProcessMissing: false })).toBe(false);
+  });
+
+  test('does not retry unless the platform itself was implicated', () => {
+    expect(shouldRetryLostContainer({ ...base, platformInterrupted: false })).toBe(false);
+  });
+
+  // Everything before the push happens inside the container and dies with it.
+  // The push is the first thing that leaves a mark elsewhere, so from there on a
+  // retry is not free and the job stays failed.
+  test('does not retry once the job had started pushing', () => {
+    expect(shouldRetryLostContainer({ ...base, lastKnownPhase: 'pushing' })).toBe(false);
+  });
+
+  test('shares the launch attempt budget', () => {
+    expect(shouldRetryLostContainer({ ...base, attemptsSoFar: MAX_LAUNCH_ATTEMPTS - 2 })).toBe(true);
+    expect(shouldRetryLostContainer({ ...base, attemptsSoFar: MAX_LAUNCH_ATTEMPTS - 1 })).toBe(false);
   });
 });
