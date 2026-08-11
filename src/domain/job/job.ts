@@ -2,6 +2,7 @@ import { branchForJob, sanitizeRef } from './branch';
 import { normalisePrompt } from './prompt';
 import type { PullRequestRequest } from './pull-request';
 import type {
+  WorkspaceRef,
   JobCommands,
   JobOptions,
   JobRecord,
@@ -204,6 +205,16 @@ export class Job {
 
   recordClaudeSession(sessionId: string): void {
     this.record.claudeSessionId = sessionId;
+  }
+
+  /** The workspace this job starts from, when it continues another. */
+  get restoreFrom(): WorkspaceRef | undefined {
+    return this.record.restoreFrom;
+  }
+
+  /** The tree and conversation this job left behind. */
+  recordWorkspace(workspace: WorkspaceRef): void {
+    this.record.workspace = workspace;
   }
 
   markSandboxDestroyed(): void {

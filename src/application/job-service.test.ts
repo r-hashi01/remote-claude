@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 import { REPO_DIR, STATE_DIR, JobService, type JobServiceDeps } from './job-service';
+import { Job } from '../domain/job/job';
 import type { ExecutorPolicy } from './ports';
 import {
   AllowAllGitHub,
@@ -684,6 +685,90 @@ describe('opening a pull request', () => {
     await h.service.tick();
 
     expect(github.opened).toEqual([]);
+  });
+});
+
+describe('carrying a workspace between sandboxes', () => {
+  // A job that stops to ask a question is continued, not restarted (ADR 0011),
+  // and continuing needs the tree and the conversation that produced it.
+  test('keeps the workspace when the job settles, before the sandbox goes', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() }));
+
+    await h.service.tick();
+
+    expect(sandbox.snapshotted).toHaveLength(1);
+    expect(sandbox.snapshotted[0]).toMatchObject({ dir: '/workspace', respectGitignore: true });
+    // node_modules is reinstallable; the conversation is not.
+    expect(h.jobs.load(job.id)?.toRecord().workspace).toEqual({ provider: 'fake', id: 'snap-1' });
+    expect(sandbox.destroyed).toBe(true);
+  });
+
+  test('a failed job keeps its workspace too — that is the one worth continuing', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'failed', updatedAt: h.clock.now() }));
+
+    await h.service.tick();
+
+    expect(h.jobs.load(job.id)?.status).toBe('failed');
+    expect(h.jobs.load(job.id)?.toRecord().workspace).toBeTruthy();
+  });
+
+  // No bucket bound is a deployment's choice, and it already shows as the
+  // absence of a workspace on the record.
+  test('a deployment with nowhere to keep it simply keeps nothing', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.snapshotRef = null;
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() }));
+
+    await h.service.tick();
+
+    expect(h.jobs.load(job.id)?.status).toBe('completed');
+    expect(h.jobs.load(job.id)?.toRecord().workspace).toBeUndefined();
+  });
+
+  test('a job that continues another restores instead of cloning', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'and now the other option' });
+    // What `POST /jobs/:id/continue` will set.
+    const record = h.jobs.load(job.id)!;
+    record.requeue();
+    const raw = record.toRecord();
+    h.jobs.save(Job.fromRecord({ ...raw, restoreFrom: { provider: 'fake', id: 'snap-1' } }));
+
+    await h.service.tick();
+
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    expect(sandbox.restored).toEqual([{ provider: 'fake', id: 'snap-1' }]);
+    expect(sandbox.cloned).toBeNull();
+    expect(h.logs.all(job.id).join('\n')).toMatch(/restoring the workspace/);
+  });
+
+  // Continuing from a fresh clone would look like continuing and behave like
+  // starting over, which is the one outcome nobody could detect from the result.
+  test('a workspace that cannot be restored fails the job rather than starting over', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    const record = h.jobs.load(job.id)!;
+    record.requeue();
+    h.jobs.save(Job.fromRecord({ ...record.toRecord(), restoreFrom: { provider: 'fake', id: 'gone' } }));
+    h.sandboxes.get(`rc-${job.id}`).restoreSucceeds = false;
+
+    await h.service.tick();
+
+    const failed = h.jobs.load(job.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.error).toMatch(/nothing to continue/);
+    expect(h.sandboxes.get(`rc-${job.id}`).cloned).toBeNull();
   });
 });
 

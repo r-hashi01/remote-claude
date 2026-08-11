@@ -53,6 +53,26 @@ export interface JobResult {
   steps: StepResult[];
 }
 
+/**
+ * An opaque pointer to a stored workspace.
+ *
+ * Only the provider that produced it may interpret its contents; `provider`
+ * exists so that restoring one against a different backend fails loudly rather
+ * than quietly misbehaving. Carried in the job record because the thing worth
+ * continuing is a specific job's tree and conversation, not a shared cache.
+ */
+export interface WorkspaceRef {
+  provider: string;
+  /**
+   * Whatever that provider needs to find it again.
+   *
+   * Narrowed to values that survive a round trip rather than `unknown`: this
+   * type travels through Durable Object RPC, where anything the platform cannot
+   * prove serializable collapses the whole record to `never`.
+   */
+  [detail: string]: string | number | boolean | null | undefined;
+}
+
 export interface JobOptions {
   skipChecks: boolean;
   keepSandbox: boolean;
@@ -122,6 +142,15 @@ export interface JobRecord {
   commands?: Partial<JobCommands>;
   /** Open a pull request when the work lands. Implies a push. */
   pullRequest?: PullRequestRequest;
+  /**
+   * The workspace this job left behind, if one was kept.
+   *
+   * Present once the job has settled and its tree and conversation were stored.
+   * What a follow-up turn restores.
+   */
+  workspace?: WorkspaceRef;
+  /** The workspace this job started from, when it continues another. */
+  restoreFrom?: WorkspaceRef;
   /**
    * The pull request this job opened.
    *

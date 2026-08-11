@@ -8,6 +8,12 @@
  * path, which is how the same string starts meaning two different things.
  */
 
+/**
+ * Everything a job can be continued from: the checkout, the state files, and the
+ * conversation Claude Code keeps beside them.
+ */
+export const WORKSPACE_DIR = '/workspace';
+
 /** Where a repository is checked out. */
 export const REPO_DIR = '/workspace/repo';
 

@@ -3,19 +3,28 @@ import {
   translateEvent,
   type AgentUsage,
   type ClaudeStreamEvent,
-} from '../domain/agent/acp';
-import { assessRunnerHealth, exceededDeadline } from '../domain/job/health';
-import { Job } from '../domain/job/job';
-import type { JobRecord, JobRequest, JobResult, JobSummary, LogLine } from '../domain/job/record';
-import { composePullRequest } from '../domain/job/pull-request';
-import { resolveRepository } from '../domain/job/repository';
-import { shouldRetryLaunch, shouldRetrySilentStartup } from '../domain/job/retry';
+} from "../domain/agent/acp";
+import { assessRunnerHealth, exceededDeadline } from "../domain/job/health";
+import { Job } from "../domain/job/job";
+import type {
+  JobRecord,
+  JobRequest,
+  JobResult,
+  JobSummary,
+  LogLine,
+} from "../domain/job/record";
+import { composePullRequest } from "../domain/job/pull-request";
+import { resolveRepository } from "../domain/job/repository";
+import {
+  shouldRetryLaunch,
+  shouldRetrySilentStartup,
+} from "../domain/job/retry";
 import {
   sandboxIdForJob,
   shouldReclaim,
   summariseLedger,
   type SandboxLedger,
-} from '../domain/sandbox/ledger';
+} from "../domain/sandbox/ledger";
 import type {
   ArtifactStore,
   Clock,
@@ -30,12 +39,12 @@ import type {
   SandboxProvider,
   SandboxSession,
   Scheduler,
-} from './ports';
-import { REPO_DIR, STATE_DIR } from './workspace';
+} from "./ports";
+import { REPO_DIR, STATE_DIR, WORKSPACE_DIR } from "./workspace";
 
 // Re-exported because these are part of this module's story (the runner contract
 // lives here) while the values themselves are shared with the session path.
-export { REPO_DIR, STATE_DIR } from './workspace';
+export { REPO_DIR, STATE_DIR } from "./workspace";
 
 /** How often to mirror a running job's state files into this executor. */
 export const POLL_INTERVAL_MS = 2_000;
@@ -137,7 +146,11 @@ export class JobService {
   async createJob(request: JobRequest): Promise<Job> {
     const { policy, clock, ids, jobs, github, scheduler } = this.deps;
 
-    const { repo, isCustom } = resolveRepository(request.repo, policy.repoUrl, policy.allowCustomRepo);
+    const { repo, isCustom } = resolveRepository(
+      request.repo,
+      policy.repoUrl,
+      policy.allowCustomRepo,
+    );
     // Asked before the job exists, so an unreachable repository is a refusal at
     // this call rather than a job that fails minutes later on clone.
     if (isCustom) await github.assertRepositoryReachable(repo);
@@ -150,14 +163,15 @@ export class JobService {
     // A pull request needs a branch on the remote, so asking for one asks for a
     // push. Refusing the combination would be pedantic; the checks below are the
     // same either way.
-    const wantsPush = request.push === true || request.pullRequest !== undefined;
+    const wantsPush =
+      request.push === true || request.pullRequest !== undefined;
 
     if (wantsPush) {
       if (!policy.allowPush) {
         throw new Error(
-          'this executor will not push: pushing is disabled on it. Set ALLOW_PUSH=true in its ' +
-            'wrangler.jsonc vars and give its GitHub App Contents: Read and write, or fetch the ' +
-            'diff and apply it yourself.'
+          "this executor will not push: pushing is disabled on it. Set ALLOW_PUSH=true in its " +
+            "wrangler.jsonc vars and give its GitHub App Contents: Read and write, or fetch the " +
+            "diff and apply it yourself.",
         );
       }
       // The switch says this deployment is willing; GitHub says whether it can.
@@ -192,17 +206,17 @@ export class JobService {
     const job = jobs.load(id);
     if (!job) return null;
 
-    if (job.status === 'queued') {
-      job.settle('cancelled', clock.now());
+    if (job.status === "queued") {
+      job.settle("cancelled", clock.now());
       jobs.save(job);
-      this.log(id, 'system', 'job cancelled before it started');
+      this.log(id, "system", "job cancelled before it started");
       logs.flush(id);
       return job;
     }
 
     if (running.requestCancel(id)) {
       // The next poll observes this, kills the container processes and settles.
-      this.log(id, 'system', 'cancellation signal sent');
+      this.log(id, "system", "cancellation signal sent");
       logs.flush(id);
       return jobs.load(id);
     }
@@ -220,7 +234,7 @@ export class JobService {
    * reads the container's own status and decides.
    */
   adopt(): void {
-    for (const job of this.deps.jobs.listByStatus(['starting', 'running'])) {
+    for (const job of this.deps.jobs.listByStatus(["starting", "running"])) {
       this.deps.running.begin(job.id);
       this.recovered.add(job.id);
     }
@@ -249,15 +263,18 @@ export class JobService {
           await this.pollJob(jobId);
         } catch (error) {
           // One unhealthy job must not stop the others or the sweep.
-          this.log(jobId, 'system', `poll failed: ${errorMessage(error)}`);
+          this.log(jobId, "system", `poll failed: ${errorMessage(error)}`);
           this.deps.logs.flush(jobId);
         }
       }
       await this.sweepOrphans();
     } finally {
       // Poll fast while work is in flight or waiting, idle slowly otherwise.
-      const busy = this.deps.running.size > 0 || this.deps.jobs.countQueued() > 0;
-      await this.deps.scheduler.scheduleIn(busy ? POLL_INTERVAL_MS : SWEEP_INTERVAL_MS);
+      const busy =
+        this.deps.running.size > 0 || this.deps.jobs.countQueued() > 0;
+      await this.deps.scheduler.scheduleIn(
+        busy ? POLL_INTERVAL_MS : SWEEP_INTERVAL_MS,
+      );
     }
   }
 
@@ -286,7 +303,8 @@ export class JobService {
    * when the pipeline ran from here.
    */
   private async launch(job: Job): Promise<void> {
-    const { policy, clock, jobs, ledger, sandboxes, scheduler, running } = this.deps;
+    const { policy, clock, jobs, ledger, sandboxes, scheduler, running } =
+      this.deps;
 
     running.begin(job.id);
     job.start(clock.now());
@@ -296,22 +314,34 @@ export class JobService {
       const sandboxId = sandboxIdForJob(job.id);
       ledger.record(sandboxId, job.id, clock.now());
 
-      const sandbox = await sandboxes.create(sandboxId, { sleepAfter: policy.sleepAfter });
+      const sandbox = await sandboxes.create(sandboxId, {
+        sleepAfter: policy.sleepAfter,
+      });
+
+      // A job that continues another starts from that job's workspace: the tree
+      // it left and the conversation about it. Falling back to a clone would
+      // silently turn a follow-up turn into a fresh start, so it fails instead.
+      const restored = await this.restoreWorkspace(job, sandbox);
 
       // Cloning stays on this side: it needs credentials injected outside the
       // container, which is the whole point of ADR 0002.
-      this.log(job.id, 'system', `cloning ${job.repo} (${job.baseBranch})`);
-      try {
-        await sandbox.cloneRepository(job.repo, { branch: job.baseBranch, targetDir: REPO_DIR });
-      } catch (error) {
-        // git's own message is about a URL and a credential and says nothing
-        // about which of the two plausible causes it is. Access is confirmed
-        // before a custom repository is accepted, so by here the branch is the
-        // likelier one — but name both rather than guess.
-        throw new Error(
-          `cloning ${job.repo} at branch "${job.baseBranch}" failed: ${errorMessage(error)}. ` +
-            'Check that the branch exists and that the GitHub App installation includes this repository.'
-        );
+      if (!restored) {
+        this.log(job.id, "system", `cloning ${job.repo} (${job.baseBranch})`);
+        try {
+          await sandbox.cloneRepository(job.repo, {
+            branch: job.baseBranch,
+            targetDir: REPO_DIR,
+          });
+        } catch (error) {
+          // git's own message is about a URL and a credential and says nothing
+          // about which of the two plausible causes it is. Access is confirmed
+          // before a custom repository is accepted, so by here the branch is the
+          // likelier one — but name both rather than guess.
+          throw new Error(
+            `cloning ${job.repo} at branch "${job.baseBranch}" failed: ${errorMessage(error)}. ` +
+              "Check that the branch exists and that the GitHub App installation includes this repository.",
+          );
+        }
       }
 
       await sandbox.writeFile(
@@ -328,12 +358,15 @@ export class JobService {
           commands: job.resolveCommands(policy.commands),
           stepTimeoutMs: policy.jobTimeoutMs,
           claudeTimeoutMs: policy.claudeTimeoutMs,
-        })
+        }),
       );
 
       // Ship the runner with the job rather than relying on the image. One
       // artifact, so no drift (ADR 0007).
-      await sandbox.writeFile(`${STATE_DIR}/runner.mjs`, this.deps.runnerSource);
+      await sandbox.writeFile(
+        `${STATE_DIR}/runner.mjs`,
+        this.deps.runnerSource,
+      );
 
       // setsid + nohup so the runner outlives the shell this exec spawned. The
       // marker is written first and separately: when a runner dies without
@@ -344,15 +377,15 @@ export class JobService {
           `setsid nohup node ${STATE_DIR}/runner.mjs ${STATE_DIR} ` +
           `> ${STATE_DIR}/runner.out 2>&1 < /dev/null &`,
         {
-          cwd: '/workspace',
+          cwd: "/workspace",
           env: this.deps.containerEnvironment?.() ?? {},
           timeoutMs: 30_000,
-        }
+        },
       );
 
       job.markRunning();
       jobs.save(job);
-      this.log(job.id, 'system', 'runner started in container');
+      this.log(job.id, "system", "runner started in container");
       await scheduler.scheduleIn(POLL_INTERVAL_MS);
     } catch (error) {
       const message = errorMessage(error);
@@ -369,15 +402,43 @@ export class JobService {
         jobs.save(current);
         this.log(
           job.id,
-          'system',
-          `platform interrupted the start (attempt ${attempts}); requeued: ${message}`
+          "system",
+          `platform interrupted the start (attempt ${attempts}); requeued: ${message}`,
         );
         await scheduler.scheduleIn(POLL_INTERVAL_MS);
         return;
       }
 
-      await this.settle(job.id, 'failed', message);
+      await this.settle(job.id, "failed", message);
     }
+  }
+
+  /**
+   * Start from another job's workspace, when this job continues one.
+   *
+   * Returns false when there is nothing to restore, so the caller clones. A
+   * restore that was asked for and failed throws: continuing from a fresh clone
+   * would look like continuing and behave like starting over.
+   */
+  private async restoreWorkspace(
+    job: Job,
+    sandbox: SandboxSession,
+  ): Promise<boolean> {
+    const from = job.restoreFrom;
+    if (!from) return false;
+
+    this.log(
+      job.id,
+      "system",
+      "restoring the workspace of the job this continues",
+    );
+    if (await sandbox.restore(from)) return true;
+
+    throw new Error(
+      "the workspace of the job this continues could not be restored, so there is " +
+        "nothing to continue. It may have expired: workspaces are kept for as long " +
+        "as the job record, and no longer.",
+    );
   }
 
   /**
@@ -394,7 +455,7 @@ export class JobService {
 
     if (running.isCancelled(jobId)) {
       await this.stopContainer(jobId);
-      await this.settle(jobId, 'cancelled', 'cancelled by request');
+      await this.settle(jobId, "cancelled", "cancelled by request");
       return;
     }
 
@@ -405,7 +466,7 @@ export class JobService {
     });
     if (overdue) {
       await this.stopContainer(jobId);
-      await this.settle(jobId, 'failed', overdue);
+      await this.settle(jobId, "failed", overdue);
       return;
     }
 
@@ -416,7 +477,11 @@ export class JobService {
     if (this.recovered.delete(jobId)) {
       const alive = await sandbox.readFile(`${STATE_DIR}/status.json`);
       if (!alive) {
-        this.log(jobId, 'system', 'worker restarted before the runner started; requeued');
+        this.log(
+          jobId,
+          "system",
+          "worker restarted before the runner started; requeued",
+        );
         running.end(jobId);
         await this.teardown(jobId);
         const current = jobs.load(jobId);
@@ -426,7 +491,11 @@ export class JobService {
         }
         return;
       }
-      this.log(jobId, 'system', 'resumed after worker restart; runner still running');
+      this.log(
+        jobId,
+        "system",
+        "resumed after worker restart; runner still running",
+      );
     }
 
     // Mirroring must never decide whether a job can finish. It used to run
@@ -436,7 +505,7 @@ export class JobService {
     await this.tryMirrorLogs(jobId, sandbox);
 
     const status = await this.readStatus(sandbox);
-    if (status?.phase === 'completed' || status?.phase === 'failed') {
+    if (status?.phase === "completed" || status?.phase === "failed") {
       await this.finalize(jobId, sandbox, status.phase);
       return;
     }
@@ -456,18 +525,19 @@ export class JobService {
       heartbeatTimeoutMs: policy.heartbeatTimeoutMs,
     });
 
-    if (health.kind === 'stalled') {
+    if (health.kind === "stalled") {
       await this.stopContainer(jobId);
-      await this.settle(jobId, 'failed', health.reason);
+      await this.settle(jobId, "failed", health.reason);
       return;
     }
 
-    if (health.kind === 'unresponsive') {
+    if (health.kind === "unresponsive") {
       // The runner's own stdout/stderr is the only thing that can say why it
       // died. We were holding it the whole time and not reading it — knowing a
       // great deal about the runner's internals while failing to report the one
       // thing anyone needs.
-      const output = (await sandbox.readFile(`${STATE_DIR}/runner.out`))?.trim() ?? '';
+      const output =
+        (await sandbox.readFile(`${STATE_DIR}/runner.out`))?.trim() ?? "";
 
       // A runner that wrote no status and printed nothing executed nothing, so
       // this is still the pre-runner window and a retry has no side effects.
@@ -481,8 +551,8 @@ export class JobService {
         const attempts = fresh.attempts + 1;
         this.log(
           jobId,
-          'system',
-          `runner started and reported nothing (attempt ${attempts}); requeued`
+          "system",
+          `runner started and reported nothing (attempt ${attempts}); requeued`,
         );
         running.end(jobId);
         await this.teardown(jobId);
@@ -498,31 +568,40 @@ export class JobService {
       // marker is written by the shell before it starts the runner: present means
       // the command ran and the runner said nothing, absent means the command
       // itself never got that far.
-      const launched = (await sandbox.readFile(`${STATE_DIR}/launched`))?.trim();
+      const launched = (
+        await sandbox.readFile(`${STATE_DIR}/launched`)
+      )?.trim();
       const detail = output
         ? `\nrunner output:\n${output.slice(-RUNNER_OUTPUT_TAIL)}`
         : launched
           ? ` The launcher ran at ${launched} but the runner printed nothing.`
-          : ' No launch marker was written, so the start command itself may never have run.';
+          : " No launch marker was written, so the start command itself may never have run.";
 
       await this.stopContainer(jobId);
-      await this.settle(jobId, 'failed', `${health.reason}${detail}`);
+      await this.settle(jobId, "failed", `${health.reason}${detail}`);
     }
   }
 
   private async readStatus(
-    sandbox: SandboxSession
-  ): Promise<{ phase?: 'completed' | 'failed' | string; updatedAt?: number } | undefined> {
+    sandbox: SandboxSession,
+  ): Promise<
+    { phase?: "completed" | "failed" | string; updatedAt?: number } | undefined
+  > {
     const raw = await sandbox.readFile(`${STATE_DIR}/status.json`);
-    return raw ? (JSON.parse(raw) as { phase?: string; updatedAt?: number }) : undefined;
+    return raw
+      ? (JSON.parse(raw) as { phase?: string; updatedAt?: number })
+      : undefined;
   }
 
   /** Mirror logs, surfacing any failure without letting it stall the job. */
-  private async tryMirrorLogs(jobId: string, sandbox: SandboxSession): Promise<void> {
+  private async tryMirrorLogs(
+    jobId: string,
+    sandbox: SandboxSession,
+  ): Promise<void> {
     try {
       await this.mirrorLogs(jobId, sandbox);
     } catch (error) {
-      this.log(jobId, 'system', `log mirroring failed: ${errorMessage(error)}`);
+      this.log(jobId, "system", `log mirroring failed: ${errorMessage(error)}`);
       // Flush immediately: a buffered report of a logging failure is a report
       // that disappears exactly when it is needed.
       this.deps.logs.flush(jobId);
@@ -534,7 +613,10 @@ export class JobService {
    *
    * Line numbers and seq numbers align: the runner writes one line per seq.
    */
-  private async mirrorLogs(jobId: string, sandbox: SandboxSession): Promise<void> {
+  private async mirrorLogs(
+    jobId: string,
+    sandbox: SandboxSession,
+  ): Promise<void> {
     const { jobs, logs, clock } = this.deps;
     const job = jobs.load(jobId);
     if (!job) return;
@@ -542,36 +624,46 @@ export class JobService {
     const since = job.logSeq + 1;
     const tail = await sandbox.exec(
       `tail -n +${since} ${STATE_DIR}/log.ndjson 2>/dev/null || true`,
-      { timeoutMs: 20_000 }
+      { timeoutMs: 20_000 },
     );
 
     let highest = job.logSeq;
-    for (const line of (tail.stdout ?? '').split('\n')) {
+    for (const line of (tail.stdout ?? "").split("\n")) {
       if (!line.trim()) continue;
       try {
-        const entry = JSON.parse(line) as { seq: number; stream: string; line: string };
+        const entry = JSON.parse(line) as {
+          seq: number;
+          stream: string;
+          line: string;
+        };
         highest = Math.max(highest, entry.seq);
 
-        if (entry.stream === 'agent') {
+        if (entry.stream === "agent") {
           // Raw agent events, interpreted by the same translator the ACP surface
           // uses. The container emits facts; meaning is assigned once.
-          const translated = translateEvent(JSON.parse(entry.line) as ClaudeStreamEvent);
+          const translated = translateEvent(
+            JSON.parse(entry.line) as ClaudeStreamEvent,
+          );
           for (const update of translated.updates) {
             const rendered = describeUpdate(update);
-            if (rendered) this.log(jobId, 'stdout', rendered);
+            if (rendered) this.log(jobId, "stdout", rendered);
           }
-          if (translated.usage || translated.finalText || translated.claudeSessionId) {
+          if (
+            translated.usage ||
+            translated.finalText ||
+            translated.claudeSessionId
+          ) {
             this.recordOutcome(
               jobId,
               translated.usage,
               translated.finalText,
-              translated.claudeSessionId
+              translated.claudeSessionId,
             );
           }
           continue;
         }
 
-        this.log(jobId, entry.stream as LogLine['stream'], entry.line);
+        this.log(jobId, entry.stream as LogLine["stream"], entry.line);
       } catch {
         // A partially written final line; it arrives complete next poll.
       }
@@ -598,7 +690,7 @@ export class JobService {
   private async finalize(
     jobId: string,
     sandbox: SandboxSession,
-    phase: 'completed' | 'failed'
+    phase: "completed" | "failed",
   ): Promise<void> {
     const { artifacts, redact } = this.deps;
 
@@ -608,7 +700,7 @@ export class JobService {
     await this.tryMirrorLogs(jobId, sandbox);
 
     const resultRaw = await sandbox.readFile(`${STATE_DIR}/result.json`);
-    const patchRaw = (await sandbox.readFile(`${STATE_DIR}/patch.diff`)) ?? '';
+    const patchRaw = (await sandbox.readFile(`${STATE_DIR}/patch.diff`)) ?? "";
 
     // Second redaction layer. The container cannot do value-based redaction —
     // it does not hold the secrets (ADR 0002) — so it happens here.
@@ -617,7 +709,9 @@ export class JobService {
     let result: JobResult | undefined;
     let error: string | undefined;
     if (resultRaw) {
-      const { error: reported, ...parsed } = JSON.parse(redact(resultRaw)) as JobResult & {
+      const { error: reported, ...parsed } = JSON.parse(
+        redact(resultRaw),
+      ) as JobResult & {
         error?: string;
       };
       // The result is kept in both cases. A failure used to arrive as one line of
@@ -633,8 +727,13 @@ export class JobService {
       await artifacts.putResult(jobId, redact(resultRaw));
     }
 
-    await this.settle(jobId, phase === 'completed' ? 'completed' : 'failed', error, result);
-    if (phase === 'completed') await this.tryOpenPullRequest(jobId);
+    await this.settle(
+      jobId,
+      phase === "completed" ? "completed" : "failed",
+      error,
+      result,
+    );
+    if (phase === "completed") await this.tryOpenPullRequest(jobId);
   }
 
   /**
@@ -652,7 +751,7 @@ export class JobService {
 
     const record = job.toRecord();
     if (!record.result?.pushed) {
-      this.log(jobId, 'system', 'no pull request: nothing was pushed');
+      this.log(jobId, "system", "no pull request: nothing was pushed");
       logs.flush(jobId);
       return;
     }
@@ -670,13 +769,13 @@ export class JobService {
         current.recordPullRequest(url);
         jobs.save(current);
       }
-      this.log(jobId, 'system', `pull request opened: ${url}`);
+      this.log(jobId, "system", `pull request opened: ${url}`);
     } catch (error) {
       this.log(
         jobId,
-        'system',
+        "system",
         `pull request could not be opened: ${errorMessage(error)}. ` +
-          `The branch ${record.branch} is pushed; open it by hand.`
+          `The branch ${record.branch} is pushed; open it by hand.`,
       );
     }
     logs.flush(jobId);
@@ -684,9 +783,9 @@ export class JobService {
 
   private async settle(
     jobId: string,
-    status: 'completed' | 'failed' | 'cancelled',
+    status: "completed" | "failed" | "cancelled",
     error?: string,
-    result?: JobResult
+    result?: JobResult,
   ): Promise<void> {
     const { jobs, logs, clock, redact, running } = this.deps;
 
@@ -694,13 +793,61 @@ export class JobService {
     const reason = error ? redact(error) : undefined;
     if (job?.settle(status, clock.now(), { error: reason, result })) {
       jobs.save(job);
-      this.log(jobId, 'system', `job ${status}${reason ? `: ${reason}` : ''}`);
+      this.log(jobId, "system", `job ${status}${reason ? `: ${reason}` : ""}`);
     }
 
     logs.flush(jobId);
     running.end(jobId);
+    // Before the sandbox goes: whatever this job leaves behind has to be taken
+    // out of it first.
+    await this.carryWorkspace(jobId);
     if (!job?.options.keepSandbox) await this.teardown(jobId);
     await this.drain();
+  }
+
+  /**
+   * Store the tree and the conversation, so this job can be continued.
+   *
+   * Kept for as long as the job record is, because a workspace whose job has
+   * been pruned is a pointer to something nobody can ask about. Never fatal: a
+   * job that has produced its diff is finished whether or not it can be resumed,
+   * and the failure is reported rather than swallowed.
+   *
+   * `.gitignore` is respected, so what travels is the working tree and the
+   * conversation beside it — not a reinstalled `node_modules`.
+   */
+  private async carryWorkspace(jobId: string): Promise<void> {
+    const { jobs, sandboxes, policy } = this.deps;
+    const job = jobs.load(jobId);
+    if (!job) return;
+
+    try {
+      const sandbox = await sandboxes.create(sandboxIdForJob(jobId));
+      const workspace = await sandbox.snapshot({
+        dir: WORKSPACE_DIR,
+        name: `job-${jobId}`,
+        ttlSeconds: Math.round(policy.retentionMs / 1000),
+        respectGitignore: true,
+      });
+
+      // Null means no store is configured for this deployment. That is a
+      // deployment's choice, not a failure, and it is already visible as the
+      // absence of a workspace on the record.
+      if (!workspace) return;
+
+      const current = jobs.load(jobId);
+      if (current) {
+        current.recordWorkspace(workspace);
+        jobs.save(current);
+      }
+    } catch (error) {
+      this.log(
+        jobId,
+        "system",
+        `the workspace could not be kept: ${errorMessage(error)}`,
+      );
+      this.deps.logs.flush(jobId);
+    }
   }
 
   private async stopContainer(jobId: string): Promise<void> {
@@ -722,7 +869,7 @@ export class JobService {
     jobId: string,
     usage?: AgentUsage,
     finalText?: string,
-    claudeSessionId?: string
+    claudeSessionId?: string,
   ): void {
     const { jobs, redact } = this.deps;
     const job = jobs.load(jobId);
@@ -738,9 +885,9 @@ export class JobService {
     if (usage) {
       this.log(
         jobId,
-        'system',
+        "system",
         `usage: ${usage.inputTokens} in / ${usage.outputTokens} out` +
-          (usage.turns ? `, ${usage.turns} turns` : '')
+          (usage.turns ? `, ${usage.turns} turns` : ""),
       );
     }
   }
@@ -767,7 +914,7 @@ export class JobService {
     }
 
     ledger.markDestroyed(sandboxId, clock.now());
-    this.log(jobId, 'system', 'sandbox destroyed');
+    this.log(jobId, "system", "sandbox destroyed");
 
     const job = jobs.load(jobId);
     if (job) {
@@ -815,7 +962,7 @@ export class JobService {
     }
   }
 
-  private log(jobId: string, stream: LogLine['stream'], line: string): void {
+  private log(jobId: string, stream: LogLine["stream"], line: string): void {
     this.deps.logs.append(jobId, stream, line);
   }
 }

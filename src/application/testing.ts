@@ -27,6 +27,7 @@ import type {
   SandboxProvider,
   SandboxSession,
   Scheduler,
+  SnapshotOptions,
   SessionState,
   SessionStore,
   SnapshotRef,
@@ -380,11 +381,19 @@ export class FakeSandbox implements SandboxSession {
     this.killed = true;
   }
 
-  async snapshot(): Promise<SnapshotRef | null> {
-    return null;
+  /** Set to null to stand in for a deployment with no bucket bound. */
+  snapshotRef: SnapshotRef | null = { provider: 'fake', id: 'snap-1' };
+  snapshotted: SnapshotOptions[] = [];
+  restored: SnapshotRef[] = [];
+  restoreSucceeds = true;
+
+  async snapshot(options: SnapshotOptions): Promise<SnapshotRef | null> {
+    this.snapshotted.push(options);
+    return this.snapshotRef;
   }
-  async restore(): Promise<boolean> {
-    return false;
+  async restore(ref: SnapshotRef): Promise<boolean> {
+    this.restored.push(ref);
+    return this.restoreSucceeds;
   }
   async pause(): Promise<void> {}
   async resume(): Promise<void> {}

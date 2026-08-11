@@ -136,7 +136,7 @@ ACP レイヤーは実装済みだがジョブ経路に繋がっていない。*
 指定しなかったキーは deployment の値を継ぎ、空文字は「skip」という指示として通る。
 これで executor のパイプライン自身が対象 repo を検証できる（`result.steps` に残る）。
 
-### RC-10. Workspace cache を配線するか、消す
+### ~~RC-10. Workspace cache を配線するか、消す~~ → 両方やった
 
 **観測**: `WORKSPACE_CACHE` / `WORKSPACE_CACHE_TTL` / `BACKUP_BUCKET` は config に読み込まれ、
 Sandbox provider は `snapshot()` / `restore()` を実装していて、README には有効化手順と
@@ -144,9 +144,18 @@ R2 cleanup の節がある。**しかしジョブの経路がそれを一度も�
 `on` にしても毎回 fresh clone になる。層分け（ADR 0008）で `application` から
 provider への呼び出しを数えたときに出てきた。
 
-**やること**: どちらかに決める。配線する（`launch` の clone を restore→fetch に置き換え、
-失敗したら clone へ fallback）か、config・env・README・provider のメソッドごと消す。
-**設定できるが効かない項目は、効かないことより「効くと読める」ことが問題。**
+**やったこと**: **フラグは消し、機構は配線した。**
+
+`WORKSPACE_CACHE` / `WORKSPACE_CACHE_TTL` は削除。**バインディングが唯一のスイッチ**になった
+（フラグとバインディングは食い違えるし、実際この2つは存在した期間ずっと食い違っていた）。
+snapshot は settle 時・teardown の前に取り、TTL はジョブ記録の保持期間と同じ7日。
+
+そして**用途が変わった**。速度のためのキャッシュではなく、**ジョブを続けるための持ち越し**
+（ADR 0011）。`.gitignore` を尊重するので運ぶのは作業ツリーと会話で、`node_modules` は運ばない
+— 継続側で入れ直せばよい。
+
+**設定できるが効かないものは、それを必要とする機能が来て初めて正しい形が分かる。**
+「速度のため」に配線していたら、会話を含める設計にはならなかった。
 
 ### ~~RC-15. startup で沈黙したまま死んだ runner は再試行できる~~ → 対応済み
 

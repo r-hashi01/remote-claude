@@ -1,3 +1,5 @@
+import type { WorkspaceRef } from '../../domain/job/record';
+
 /**
  * Sandbox provider abstraction.
  *
@@ -47,14 +49,13 @@ export interface SnapshotOptions {
 /**
  * Opaque, JSON-serializable pointer to a stored snapshot.
  *
+ * Defined by the domain, because the job record carries it.
+ *
  * Callers must persist and pass it back verbatim; only the provider that
  * produced it may interpret its contents. `provider` exists so a restore
  * against a different backend fails loudly instead of silently misbehaving.
  */
-export interface SnapshotRef {
-  provider: string;
-  [key: string]: unknown;
-}
+export type SnapshotRef = WorkspaceRef;
 
 /** A running (or lazily startable) sandbox instance. */
 export interface SandboxSession {
