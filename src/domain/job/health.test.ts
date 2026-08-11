@@ -63,7 +63,8 @@ describe('assessRunnerHealth', () => {
     const verdict = assessRunnerHealth({
       now,
       startedAt,
-      lastProgressAt: now - 1_000,
+      // Silent as well as pulseless: output would say it is alive.
+      lastProgressAt: 0,
       heartbeatAt: 0,
       phase: 'agent',
       ...LIMITS,
@@ -71,6 +72,24 @@ describe('assessRunnerHealth', () => {
     expect(verdict.kind).toBe('unresponsive');
     expect(verdict.reason).toMatch(/runner stopped responding during "agent"/);
     expect(verdict.reason).toMatch(/no heartbeat for 120s/);
+  });
+
+  // This killed a real job. It had finished a forty-three second install and was
+  // inside its agent step; the status file could not be read on that one poll, so
+  // the heartbeat fell back to the job's start time, which was long past — while
+  // the log had advanced seconds earlier. A runner that is producing output is
+  // not gone, whatever the status file says.
+  test('output a moment ago outranks a heartbeat that cannot be read', () => {
+    const now = DEFAULT_HEARTBEAT_TIMEOUT_MS * 4;
+    const verdict = assessRunnerHealth({
+      now,
+      startedAt: 0,
+      lastProgressAt: now - 2_000,
+      heartbeatAt: undefined,
+      phase: 'agent',
+      ...LIMITS,
+    });
+    expect(verdict.kind).toBe('healthy');
   });
 
   // "Stuck" and "gone" want different responses from whoever reads this, so a
@@ -97,7 +116,7 @@ describe('assessRunnerHealth', () => {
     const verdict = assessRunnerHealth({
       now,
       startedAt: 0,
-      lastProgressAt: now,
+      lastProgressAt: 0,
       heartbeatAt: 0,
       ...LIMITS,
     });

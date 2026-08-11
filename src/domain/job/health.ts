@@ -84,7 +84,14 @@ export function assessRunnerHealth(input: RunnerHealthInput): RunnerHealth {
     };
   }
 
-  const sinceBeat = now - (heartbeatAt ?? startedAt ?? now);
+  // Output arriving is proof of life, and stronger proof than a status file: it
+  // says the runner did something, not merely that it was there. Taking the
+  // latest of the two stops the weaker signal from vetoing the stronger one —
+  // which it did, killing a job in the middle of its agent step because the
+  // status file could not be read on that one poll while its log was still
+  // advancing.
+  const lastSeen = Math.max(heartbeatAt ?? 0, lastProgressAt ?? 0, startedAt ?? now);
+  const sinceBeat = now - lastSeen;
   if (sinceBeat > input.heartbeatTimeoutMs) {
     return {
       kind: 'unresponsive',
