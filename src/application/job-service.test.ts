@@ -373,6 +373,26 @@ describe('following a running job', () => {
     expect(job?.finalText).toBe('Fixed it.');
   });
 
+  // It arrives in the first event of every run. Continuing a job later is only
+  // possible because of it, and it used to be read and dropped.
+  test('remembers the conversation the agent is having', async () => {
+    const h = await started();
+    const sandbox = h.sandboxes.get(`rc-${h.jobId}`);
+    sandbox.files.set(
+      `${STATE_DIR}/log.ndjson`,
+      ndjson({
+        seq: 1,
+        stream: 'agent',
+        line: JSON.stringify({ type: 'system', subtype: 'init', session_id: 'abc-123' }),
+      })
+    );
+    sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'agent', updatedAt: h.clock.now() }));
+
+    await h.service.tick();
+
+    expect(h.jobs.load(h.jobId)?.claudeSessionId).toBe('abc-123');
+  });
+
   test('settles a finished job, storing the patch and the result', async () => {
     const h = await started();
     const sandbox = h.sandboxes.get(`rc-${h.jobId}`);

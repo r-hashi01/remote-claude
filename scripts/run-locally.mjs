@@ -28,6 +28,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claudeProcessEnvironment } from '../src/domain/agent/environment.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
@@ -74,7 +75,23 @@ writeFileSync(
 
 process.stderr.write(`state:  ${stateDir}\nclone:  ${checkout}\nsource: ${repoDir} (untouched)\nbranch: ${branch}\n\n`);
 
-const env = { ...process.env, REPO_DIR: checkout, IS_SANDBOX: '1' };
+// The same environment the Worker builds, so the harness exercises the runner
+// under the conditions it actually runs in — including the Anthropic variables
+// being unset, which is a rule the pipeline verifies for itself.
+//
+// One value is deliberately not applied. In the container the conversation
+// directory is moved inside /workspace so that a single snapshot carries both
+// the tree and the conversation, and authentication comes from the environment
+// rather than from that directory — the container's is empty either way. Here it
+// is where `claude setup-token` left your credentials, so moving it logs you out.
+const { CLAUDE_CONFIG_DIR: _containerOnly, ...overrides } = claudeProcessEnvironment({
+  authMode: 'direct',
+  oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+  ci: true,
+});
+const env = { ...process.env, ...overrides, REPO_DIR: checkout, IS_SANDBOX: '1' };
+// `undefined` means unset, which an inherited environment will not do by itself.
+for (const [name, value] of Object.entries(overrides)) if (value === undefined) delete env[name];
 if (noAgent) {
   // The runner invokes `claude`; shadow it with a stub on PATH.
   const stubDir = mkdtempSync(join(tmpdir(), 'rc-stub-'));

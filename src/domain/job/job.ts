@@ -197,6 +197,15 @@ export class Job {
     this.record.finalText = text;
   }
 
+  /** The conversation a follow-up turn would resume. */
+  get claudeSessionId(): string | undefined {
+    return this.record.claudeSessionId;
+  }
+
+  recordClaudeSession(sessionId: string): void {
+    this.record.claudeSessionId = sessionId;
+  }
+
   markSandboxDestroyed(): void {
     this.record.sandboxDestroyed = true;
   }

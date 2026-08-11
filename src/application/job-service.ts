@@ -560,8 +560,13 @@ export class JobService {
             const rendered = describeUpdate(update);
             if (rendered) this.log(jobId, 'stdout', rendered);
           }
-          if (translated.usage || translated.finalText) {
-            this.recordOutcome(jobId, translated.usage, translated.finalText);
+          if (translated.usage || translated.finalText || translated.claudeSessionId) {
+            this.recordOutcome(
+              jobId,
+              translated.usage,
+              translated.finalText,
+              translated.claudeSessionId
+            );
           }
           continue;
         }
@@ -713,13 +718,21 @@ export class JobService {
    * Written as it arrives rather than at finalize, so a job that later fails
    * still reports what it consumed and what it last said.
    */
-  private recordOutcome(jobId: string, usage?: AgentUsage, finalText?: string): void {
+  private recordOutcome(
+    jobId: string,
+    usage?: AgentUsage,
+    finalText?: string,
+    claudeSessionId?: string
+  ): void {
     const { jobs, redact } = this.deps;
     const job = jobs.load(jobId);
     if (!job) return;
 
     if (usage) job.recordUsage(usage);
     if (finalText) job.recordFinalText(redact(finalText));
+    // Arrives in the first event of every run and was discarded until now. It is
+    // the only handle on the conversation a follow-up turn would continue.
+    if (claudeSessionId) job.recordClaudeSession(claudeSessionId);
     jobs.save(job);
 
     if (usage) {

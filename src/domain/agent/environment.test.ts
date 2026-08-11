@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { claudeProcessEnvironment } from './environment';
+import { CLAUDE_CONFIG_DIR, claudeProcessEnvironment } from './environment';
 
 describe('claudeProcessEnvironment', () => {
   test('always unsets the ambient Anthropic variables', () => {
@@ -53,6 +53,14 @@ describe('claudeProcessEnvironment', () => {
   test('sandbox marker is always set', () => {
     const env = claudeProcessEnvironment({ authMode: 'proxy', oauthToken: undefined, ci: false });
     expect(env.IS_SANDBOX).toBe('1');
+  });
+
+  // Claude Code keeps conversations in the home directory by default, which is
+  // the one place a workspace snapshot cannot carry between sandboxes.
+  test('the conversation is kept inside the workspace, so a snapshot holds it', () => {
+    const env = claudeProcessEnvironment({ authMode: 'proxy', oauthToken: undefined, ci: true });
+    expect(env.CLAUDE_CONFIG_DIR).toBe(CLAUDE_CONFIG_DIR);
+    expect(CLAUDE_CONFIG_DIR.startsWith('/workspace/')).toBe(true);
   });
 
   test('CI is set only when requested, and omitted entirely otherwise', () => {
