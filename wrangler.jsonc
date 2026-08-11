@@ -133,6 +133,13 @@
     // the App installation, not by editing a list here.
     "ALLOW_CUSTOM_REPO": "true",
 
+    // Read by the Sandbox SDK, not by this Worker: storing a workspace uploads
+    // it from the container over a presigned URL, which needs the bucket by name
+    // as well as by binding, plus CLOUDFLARE_ACCOUNT_ID and the R2 S3 keys as
+    // secrets. Four things, and the error names all four — but only once the
+    // reason stopped being swallowed.
+    "BACKUP_BUCKET_NAME": "remote-claude-workspaces",
+
 
     // Outbound allowlist for the sandbox. Everything else is dropped.
     "SANDBOX_ALLOWED_HOSTS": "github.com,codeload.github.com,api.github.com,objects.githubusercontent.com,api.anthropic.com,registry.npmjs.org,pypi.org,files.pythonhosted.org,proxy.golang.org,crates.io,static.crates.io",
