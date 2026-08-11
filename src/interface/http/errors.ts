@@ -1,4 +1,4 @@
-import { Refusal } from '../../domain/job/errors';
+import { NotFound, Refusal } from '../../domain/job/errors';
 import type { Redact } from '../../application/ports';
 
 /**
@@ -12,10 +12,10 @@ import type { Redact } from '../../application/ports';
 export function toErrorResponse(error: unknown, redact: Redact): Response {
   const message = redact(error instanceof Error ? error.message : String(error));
 
-  // A refusal says so for itself. This used to be guessed from the wording, by
+  // Each error says what it is. This used to be guessed from the wording, by
   // matching against a list of words, so every new refusal had to remember to
   // contain one of them — and the ones that forgot reported a caller's mistake
   // as a server error.
-  const status = error instanceof Refusal ? 400 : 500;
+  const status = error instanceof NotFound ? 404 : error instanceof Refusal ? 400 : 500;
   return Response.json({ error: message }, { status });
 }

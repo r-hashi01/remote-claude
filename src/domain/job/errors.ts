@@ -16,3 +16,18 @@ export class Refusal extends Error {
     this.name = 'Refusal';
   }
 }
+
+/**
+ * Asked about something this executor does not have.
+ *
+ * Separate from a refusal because the answers differ in kind: a refusal means
+ * "not like that", and this means "not here". They were briefly the same thing —
+ * continuing a job that does not exist answered 400 while fetching the same job
+ * answered 404, so a caller could not tell "no such job" from "bad request".
+ */
+export class NotFound extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotFound';
+  }
+}

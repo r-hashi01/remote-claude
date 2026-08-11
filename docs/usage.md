@@ -348,4 +348,6 @@ name every other endpoint uses. `GET /jobs` likewise returns the same array unde
 both `jobs` and `tasks`.
 
 Errors are `{"error": "..."}`. A 400 means the request or the deployment's
-configuration — the message says which — and a 401 means the token.
+configuration — the message says which — a 404 means this executor has no such
+job, and a 401 means the token. A 500 is this executor's own fault, and the
+distinction is carried by the error rather than inferred from its wording.
