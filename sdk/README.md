@@ -40,6 +40,10 @@ if (finished.status === 'completed') {
 `waitForJob` resolves on `failed` and `cancelled` too: those are outcomes, not
 exceptions. Read `status` and `error`.
 
+A failed job still carries `result.steps` — the commands the executor ran and
+what each printed — which is usually what a reader wants from a failure. The
+reason it failed is on `error`, not inside `result`.
+
 ## Another repository
 
 A deployment has one configured repository and will run against others when it

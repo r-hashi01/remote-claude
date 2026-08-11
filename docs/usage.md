@@ -241,7 +241,10 @@ there: once the runner is up, retrying would re-run your prompt. A job that
 starts, reports nothing at all and stops is also retried, because a runner that
 wrote neither a status nor a line of output cannot have executed anything.
 
-Failed jobs keep their usage and their closing message; `status` still shows them.
+A failed job keeps everything a successful one does apart from the diff: the
+steps that ran, with the command each one used and what it printed, plus the
+usage and the agent's closing message. `status` shows them, and `result.steps`
+carries them over the API — a failure is where that detail is worth most.
 
 ## Interactive sessions (ACP)
 
