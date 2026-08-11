@@ -40,7 +40,12 @@ describe('shouldRetryLaunch', () => {
 });
 
 describe('shouldRetrySilentStartup', () => {
-  const base = { runnerReportedStatus: false, runnerOutput: '', attemptsSoFar: 0 };
+  const base = {
+    runnerReportedStatus: false,
+    runnerOutput: '',
+    producedOutput: false,
+    attemptsSoFar: 0,
+  };
 
   // Seen twice in five launches: the runner is written and started, the exec
   // returns, and then nothing — no status file and an empty log. The runner
@@ -52,6 +57,13 @@ describe('shouldRetrySilentStartup', () => {
 
   test('does not retry once the runner has said anything', () => {
     expect(shouldRetrySilentStartup({ ...base, runnerOutput: 'Error: out of memory' })).toBe(false);
+  });
+
+  // The one that was missing. A job with lines in its log has executed, whatever
+  // the other two signals say — and without this a healthy job was requeued in
+  // the middle of its agent step, having already run a forty-three second install.
+  test('never retries a job that has produced any output at all', () => {
+    expect(shouldRetrySilentStartup({ ...base, producedOutput: true })).toBe(false);
   });
 
   test('does not retry a runner that got as far as writing its status', () => {

@@ -34,6 +34,16 @@ export interface SilentStartupInput {
   runnerReportedStatus: boolean;
   /** The runner's own stdout/stderr, trimmed. */
   runnerOutput: string;
+  /**
+   * Whether any of the job's log has been mirrored yet.
+   *
+   * The strongest of the three, and the one that was missing: a job with lines
+   * in its log has executed, whatever the other two say. Without this, a healthy
+   * job was requeued in the middle of its agent step — install had already run
+   * for forty-three seconds — because the status file happened to be unreadable
+   * on one poll.
+   */
+  producedOutput: boolean;
   attemptsSoFar: number;
 }
 
@@ -54,6 +64,7 @@ export function shouldRetrySilentStartup(
   input: SilentStartupInput,
   maxAttempts: number = MAX_LAUNCH_ATTEMPTS
 ): boolean {
+  if (input.producedOutput) return false;
   if (input.runnerReportedStatus) return false;
   if (input.runnerOutput.trim() !== '') return false;
   return input.attemptsSoFar + 1 < maxAttempts;

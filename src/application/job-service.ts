@@ -602,6 +602,9 @@ export class JobService {
       if (
         shouldRetrySilentStartup({
           runnerReportedStatus: status !== undefined,
+          // Anything mirrored means the runner ran. This is read from the job
+          // rather than inferred from files that may be momentarily unreadable.
+          producedOutput: fresh.logSeq > 0,
           runnerOutput: output,
           attemptsSoFar: fresh.attempts,
         })
