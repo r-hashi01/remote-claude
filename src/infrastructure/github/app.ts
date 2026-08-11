@@ -64,7 +64,7 @@ export async function getInstallationToken(env: Env): Promise<string> {
   if (!config) {
     throw new Error(
       'GitHub App is not configured: set GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY and ' +
-        'GITHUB_APP_INSTALLATION_ID (see README "GitHub App を用意する").'
+        'GITHUB_APP_INSTALLATION_ID (see docs/operating.md, "A GitHub App").'
     );
   }
 
