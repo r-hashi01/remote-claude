@@ -95,6 +95,14 @@ export interface JobRecord {
   /** What the agent consumed. Recorded as it arrives, so a failure keeps it. */
   usage?: JobUsage;
   /**
+   * Claude Code's own session id, captured from the first event of the run.
+   *
+   * What a follow-up turn resumes. It arrives in every run and used to be
+   * discarded; without it, continuing a job means asking the agent to
+   * reconstruct a conversation it cannot see.
+   */
+  claudeSessionId?: string;
+  /**
    * The agent's closing message, taken from the result event.
    *
    * Kept separately from `result.claudeOutput`: since the agent runs with
