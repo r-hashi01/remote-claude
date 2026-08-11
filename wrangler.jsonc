@@ -158,8 +158,8 @@
     //
     // Switch both lines the moment that lands on origin/main. Nothing else
     // needs to change.
-    "INSTALL_COMMAND": "npm --prefix packages/spindle-core ci --no-audit --no-fund",
-    "LINT_COMMAND": "npm --prefix packages/spindle-core run typecheck",
+    "INSTALL_COMMAND": "npm ci --no-audit --no-fund",
+    "LINT_COMMAND": "npm run typecheck",
     // spindle has no test suite yet; typecheck above is the only gate.
     "TEST_COMMAND": "",
     "BUILD_COMMAND": ""
