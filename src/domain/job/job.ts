@@ -1,4 +1,5 @@
 import { branchForJob, sanitizeRef } from './branch';
+import { Refusal } from './errors';
 import { normalisePrompt } from './prompt';
 import type { PullRequestRequest } from './pull-request';
 import type {
@@ -102,18 +103,18 @@ export class Job {
     const before = previous.toRecord();
 
     if (!previous.isTerminal) {
-      throw new Error(
+      throw new Refusal(
         `job ${before.id} is still ${before.status}; a job can only be continued once it has finished.`
       );
     }
     if (!before.workspace) {
-      throw new Error(
+      throw new Refusal(
         `job ${before.id} kept no workspace, so there is nothing to continue. Workspaces are kept ` +
           'only when the executor has a bucket bound for them, and only for as long as the job record.'
       );
     }
     if (!before.claudeSessionId) {
-      throw new Error(
+      throw new Refusal(
         `job ${before.id} never started a conversation — it stopped before the agent ran — so there ` +
           'is nothing to resume. Submit a new job instead.'
       );

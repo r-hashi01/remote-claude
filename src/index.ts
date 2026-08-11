@@ -1,3 +1,4 @@
+import { Refusal } from './domain/job/errors';
 import { createRedactor } from './domain/redaction/redactor';
 import type { Env } from './infrastructure/env';
 import { maskedSecrets } from './infrastructure/secrets';
@@ -34,8 +35,11 @@ export default {
       return await route(request, env);
     } catch (error) {
       const message = redact(error instanceof Error ? error.message : String(error));
-      // 4xx for caller mistakes, 500 for everything else.
-      const status = /required|invalid|must|disabled|exceeds|cannot reach/i.test(message) ? 400 : 500;
+      // A refusal says so for itself. This used to be guessed from the wording,
+      // which meant every new refusal had to remember to contain one of a list of
+      // words — and the ones that forgot reported a caller's mistake as a server
+      // error.
+      const status = error instanceof Refusal ? 400 : 500;
       return Response.json({ error: message }, { status });
     }
   },

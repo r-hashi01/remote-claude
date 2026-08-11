@@ -206,11 +206,23 @@ over — see [ADR 0011](adr/0011-continue-a-job-rather-than-steer-it.md). That
 needs the tree it left and the conversation that produced it, so when a job
 settles its workspace is stored and the record points at it.
 
-**The binding is the switch.** An R2 bucket bound as `BACKUP_BUCKET` means
-workspaces are kept for as long as the job record is (seven days); no binding
-means jobs run exactly as before and simply cannot be continued. There is no
-separate flag, because a flag and a binding can disagree — and the one that used
-to be here did, for as long as it existed.
+**Two things, and no flag.** An R2 bucket bound as `BACKUP_BUCKET`, and the R2
+S3 credentials the container uploads with:
+
+```bash
+npx wrangler secret put R2_ACCESS_KEY_ID       # Dashboard → R2 → Manage API tokens
+npx wrangler secret put R2_SECRET_ACCESS_KEY
+```
+
+With both, workspaces are kept for as long as the job record is (seven days).
+With neither, jobs run exactly as before and simply cannot be continued. There is
+no separate on/off flag, because a flag and a binding can disagree — and the one
+that used to be here did, for as long as it existed.
+
+The credentials are easy to miss: the bucket alone looks like enough, and the
+first continuation attempted on this deployment was refused with "kept no
+workspace" because of it. A failure to store a workspace is now reported in the
+job's log rather than swallowed.
 
 This deployment has one. Another would need:
 
@@ -221,7 +233,12 @@ npx wrangler r2 bucket create remote-claude-workspaces
 ```
 
 What travels is the working tree and the conversation beside it, with
-`.gitignore` respected — so not `node_modules`, which a continuation reinstalls.
+`node_modules` excluded by name — a continuation reinstalls it. (Excluded by name
+rather than by `.gitignore`, which the sandbox applies only when the directory is
+itself inside a repository, and `/workspace` is one level above it.)
+
+Restoring produces an overlay mount that lives as long as the container, so a
+continuation restores and runs; it does not hold a workspace open between turns.
 Failing to keep a workspace never fails a job that has already produced its diff.
 Failing to *restore* one does fail the job that asked for it, because continuing
 from a fresh clone would look like continuing and behave like starting over.
