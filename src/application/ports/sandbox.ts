@@ -87,6 +87,23 @@ export interface SandboxSession {
   /** Read a file. Returns null when it does not exist. */
   readFile(path: string): Promise<string | null>;
 
+  /**
+   * Start a long-running process the platform owns.
+   *
+   * Distinct from `exec`, which runs a command and waits. This is for the runner,
+   * which has to outlive the call that started it — and the reason it exists as a
+   * port at all is that doing it by hand did not reliably work: a `setsid nohup …
+   * &` inside an exec left the runner dead and silent in two of the first five
+   * launches, with nothing to ask about it afterwards.
+   *
+   * `id` is chosen by the caller so the process can be found again after this
+   * side restarts.
+   */
+  startProcess(command: string, options: StartProcessOptions): Promise<SandboxProcess>;
+
+  /** The process with this id, or null when the platform has none. */
+  findProcess(id: string): Promise<SandboxProcess | null>;
+
   /** Terminate every running process, leaving the sandbox itself alive. */
   killAll(): Promise<void>;
 
@@ -107,6 +124,28 @@ export interface SandboxSession {
 
   /** Permanently delete the sandbox and all of its state. */
   destroy(): Promise<void>;
+}
+
+export interface StartProcessOptions {
+  /** Chosen by the caller, so it can be found again. */
+  id: string;
+  cwd?: string;
+  /** `undefined` for a key unsets that variable inside the sandbox. */
+  env?: Record<string, string | undefined>;
+}
+
+/**
+ * A process the platform is holding for us.
+ *
+ * `alive` answers the question the executor used to infer from the absence of a
+ * file: is the runner still there. `output` is what it has printed, which is the
+ * only thing that can say why it stopped.
+ */
+export interface SandboxProcess {
+  readonly id: string;
+  alive(): Promise<boolean>;
+  output(): Promise<string>;
+  kill(): Promise<void>;
 }
 
 export interface CreateSandboxOptions {

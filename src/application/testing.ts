@@ -24,8 +24,10 @@ import type {
   OpenPullRequest,
   RunningJobs,
   SandboxLedgerStore,
+  SandboxProcess,
   SandboxProvider,
   SandboxSession,
+  StartProcessOptions,
   Scheduler,
   SnapshotOptions,
   SessionState,
@@ -377,8 +379,43 @@ export class FakeSandbox implements SandboxSession {
     return this.files.get(path) ?? null;
   }
 
+  /** Processes the platform is holding, by the id the caller chose. */
+  readonly processes = new Map<string, { alive: boolean; output: string }>();
+  /** Set to make starting one fail, the way a busy platform does. */
+  startProcessError: string | null = null;
+
+  async startProcess(command: string, options: StartProcessOptions): Promise<SandboxProcess> {
+    this.commands.push(command);
+    if (this.startProcessError) throw new Error(this.startProcessError);
+    this.processes.set(options.id, { alive: true, output: '' });
+    return this.process(options.id);
+  }
+
+  async findProcess(id: string): Promise<SandboxProcess | null> {
+    return this.processes.has(id) ? this.process(id) : null;
+  }
+
+  /** For arranging a test: what the platform would say about this process. */
+  setProcess(id: string, state: { alive: boolean; output?: string }): void {
+    this.processes.set(id, { alive: state.alive, output: state.output ?? '' });
+  }
+
+  private process(id: string): SandboxProcess {
+    const processes = this.processes;
+    return {
+      id,
+      alive: async () => processes.get(id)?.alive === true,
+      output: async () => processes.get(id)?.output ?? '',
+      kill: async () => {
+        const current = processes.get(id);
+        if (current) current.alive = false;
+      },
+    };
+  }
+
   async killAll(): Promise<void> {
     this.killed = true;
+    for (const state of this.processes.values()) state.alive = false;
   }
 
   /** Set to null to stand in for a deployment with no bucket bound. */

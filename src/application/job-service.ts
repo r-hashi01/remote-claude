@@ -60,6 +60,11 @@ export const POLL_INTERVAL_MS = 2_000;
  */
 export const SWEEP_INTERVAL_MS = 60 * 1000;
 
+/** The runner of a given job, as the platform knows it. */
+export function runnerProcessId(jobId: string): string {
+  return `runner-${jobId}`;
+}
+
 /** How much of the runner's own output to quote when it dies. */
 const RUNNER_OUTPUT_TAIL = 2_000;
 
@@ -420,20 +425,19 @@ export class JobService {
         this.deps.runnerSource,
       );
 
-      // setsid + nohup so the runner outlives the shell this exec spawned. The
-      // marker is written first and separately: when a runner dies without
-      // printing anything, the only remaining question is whether this shell ran
-      // at all, and nothing in the sandbox could answer it.
-      await sandbox.exec(
-        `mkdir -p ${STATE_DIR} && date -u +%Y-%m-%dT%H:%M:%SZ > ${STATE_DIR}/launched && ` +
-          `setsid nohup node ${STATE_DIR}/runner.mjs ${STATE_DIR} ` +
-          `> ${STATE_DIR}/runner.out 2>&1 < /dev/null &`,
-        {
-          cwd: '/workspace',
-          env: this.deps.containerEnvironment?.() ?? {},
-          timeoutMs: 30_000,
-        },
-      );
+      // Handed to the platform rather than backgrounded from a shell.
+      //
+      // The shell version — `setsid nohup … &` inside an exec — depended on that
+      // shell's session outliving the call, and twice in the first five launches
+      // it did not: the runner was gone, had printed nothing, and there was
+      // nothing left to ask about it. That was retried rather than explained
+      // (RC-15), and a marker file was added to guess which half had failed. A
+      // process the platform owns can simply be asked instead.
+      await sandbox.startProcess(`node ${STATE_DIR}/runner.mjs ${STATE_DIR}`, {
+        id: runnerProcessId(job.id),
+        cwd: '/workspace',
+        env: this.deps.containerEnvironment?.() ?? {},
+      });
 
       job.markRunning();
       jobs.save(job);
@@ -588,8 +592,10 @@ export class JobService {
       // died. We were holding it the whole time and not reading it — knowing a
       // great deal about the runner's internals while failing to report the one
       // thing anyone needs.
-      const output =
-        (await sandbox.readFile(`${STATE_DIR}/runner.out`))?.trim() ?? '';
+      // Asked of the platform that is holding the process, rather than read out
+      // of a file the runner may never have opened.
+      const runner = await sandbox.findProcess(runnerProcessId(jobId));
+      const output = ((await runner?.output()) ?? '').trim();
 
       // A runner that wrote no status and printed nothing executed nothing, so
       // this is still the pre-runner window and a retry has no side effects.
@@ -616,18 +622,14 @@ export class JobService {
         return;
       }
 
-      // Nothing to quote, so say which half of the start failed instead. The
-      // marker is written by the shell before it starts the runner: present means
-      // the command ran and the runner said nothing, absent means the command
-      // itself never got that far.
-      const launched = (
-        await sandbox.readFile(`${STATE_DIR}/launched`)
-      )?.trim();
+      // A process the platform has never heard of and one it is holding are
+      // different failures. Guessing between them is what the marker file was
+      // for; now the answer is a question away.
       const detail = output
         ? `\nrunner output:\n${output.slice(-RUNNER_OUTPUT_TAIL)}`
-        : launched
-          ? ` The launcher ran at ${launched} but the runner printed nothing.`
-          : ' No launch marker was written, so the start command itself may never have run.';
+        : runner === null
+          ? ' The platform has no record of the runner process, so it never started.'
+          : ' The runner process is still there and has printed nothing at all.';
 
       await this.stopContainer(jobId);
       await this.settle(jobId, 'failed', `${health.reason}${detail}`);
