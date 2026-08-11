@@ -2,6 +2,7 @@
   "name": "@r-hashi01/remote-claude-client",
   "version": "0.1.0",
   "description": "Typed client for the remote-claude job API",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
