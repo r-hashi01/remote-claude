@@ -206,15 +206,17 @@ over — see [ADR 0011](adr/0011-continue-a-job-rather-than-steer-it.md). That
 needs the tree it left and the conversation that produced it, so when a job
 settles its workspace is stored and the record points at it.
 
-**The binding is the switch.** Bind an R2 bucket as `BACKUP_BUCKET` and
-workspaces are kept for as long as the job record is (seven days); bind nothing
-and jobs run exactly as before and simply cannot be continued. There is no
+**The binding is the switch.** An R2 bucket bound as `BACKUP_BUCKET` means
+workspaces are kept for as long as the job record is (seven days); no binding
+means jobs run exactly as before and simply cannot be continued. There is no
 separate flag, because a flag and a binding can disagree — and the one that used
 to be here did, for as long as it existed.
 
+This deployment has one. Another would need:
+
 ```bash
 npx wrangler r2 bucket create remote-claude-workspaces
-# then add to r2_buckets in wrangler.jsonc:
+# and in wrangler.jsonc, alongside ARTIFACTS:
 #   { "binding": "BACKUP_BUCKET", "bucket_name": "remote-claude-workspaces" }
 ```
 
