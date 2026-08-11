@@ -220,8 +220,10 @@ describe('starting queued work', () => {
       prompt: 'fix the build',
       branch: job.branch,
     });
-    // setsid + nohup, so the runner outlives the shell that spawned it.
-    expect(sandbox.commands.join('\n')).toMatch(/setsid nohup node .*runner\.mjs/);
+    // Started as a process the platform owns and can be asked about, rather than
+    // backgrounded from a shell whose session may or may not outlive the call.
+    expect(sandbox.commands.join('\n')).toMatch(/node .*runner\.mjs/);
+    expect([...sandbox.processes.keys()]).toEqual([`runner-${job.id}`]);
     expect(jobs.load(job.id)?.status).toBe('running');
   });
 
@@ -479,7 +481,7 @@ describe('following a running job', () => {
     const h = await started();
     const sandbox = h.sandboxes.get(`rc-${h.jobId}`);
     sandbox.files.set(`${STATE_DIR}/status.json`, JSON.stringify({ phase: 'agent', updatedAt: h.clock.now() }));
-    sandbox.files.set(`${STATE_DIR}/runner.out`, 'Error: out of memory');
+    sandbox.setProcess(`runner-${h.jobId}`, { alive: false, output: 'Error: out of memory' });
 
     h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
     await h.service.tick();
@@ -508,7 +510,12 @@ describe('following a running job', () => {
 
   test('a runner that printed something is failed, not retried', async () => {
     const h = await started();
-    h.sandboxes.get(`rc-${h.jobId}`).files.set(`${STATE_DIR}/runner.out`, 'Error: out of memory');
+    // One line of output means something may have run, so this is not the
+    // pre-runner window any more. Asked of the platform now, not read out of a
+    // file the runner may never have opened.
+    h.sandboxes
+      .get(`rc-${h.jobId}`)
+      .setProcess(`runner-${h.jobId}`, { alive: false, output: 'Error: out of memory' });
 
     h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
     await h.service.tick();
@@ -516,35 +523,37 @@ describe('following a running job', () => {
     expect(h.jobs.load(h.jobId)?.status).toBe('failed');
   });
 
-  test('stops requeueing once the attempts are spent, and says whether the launcher ran', async () => {
+  test('stops requeueing once the attempts are spent, and says what the platform still knows', async () => {
     const h = await started();
     const record = h.jobs.load(h.jobId)!;
     record.requeue({ attempts: 2 });
     record.start(h.clock.now());
     record.markRunning();
     h.jobs.save(record);
-    h.sandboxes.get(`rc-${h.jobId}`).files.set(`${STATE_DIR}/launched`, '2026-08-10T14:00:00Z');
+    // The platform is still holding it, and it has said nothing.
+    h.sandboxes.get(`rc-${h.jobId}`).setProcess(`runner-${h.jobId}`, { alive: true });
 
     h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
     await h.service.tick();
 
     const job = h.jobs.load(h.jobId);
     expect(job?.status).toBe('failed');
-    expect(job?.error).toMatch(/launcher ran at 2026-08-10T14:00:00Z/);
+    expect(job?.error).toMatch(/still there and has printed nothing/);
   });
 
-  test('says so when even the launch command left no trace', async () => {
+  test('says so when the platform never had the process at all', async () => {
     const h = await started();
     const record = h.jobs.load(h.jobId)!;
     record.requeue({ attempts: 2 });
     record.start(h.clock.now());
     record.markRunning();
     h.jobs.save(record);
+    h.sandboxes.get(`rc-${h.jobId}`).processes.delete(`runner-${h.jobId}`);
 
     h.clock.advance(h.deps.policy.heartbeatTimeoutMs + 1_000);
     await h.service.tick();
 
-    expect(h.jobs.load(h.jobId)?.error).toMatch(/no launch marker/i);
+    expect(h.jobs.load(h.jobId)?.error).toMatch(/no record of the runner process/i);
   });
 
   test('presumes a runner that beats but produces nothing is stuck', async () => {

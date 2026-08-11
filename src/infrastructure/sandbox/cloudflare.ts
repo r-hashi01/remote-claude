@@ -1,6 +1,8 @@
 import { getSandbox } from '@cloudflare/sandbox';
 import type {
   CloneOptions,
+  SandboxProcess,
+  StartProcessOptions,
   CreateSandboxOptions,
   ExecOptions,
   ExecResult,
@@ -74,6 +76,50 @@ class CloudflareSandboxSession implements SandboxSession {
       ...(options.branch ? { branch: options.branch } : {}),
       ...(options.depth ? { depth: options.depth } : {}),
     });
+  }
+
+  /**
+   * Hand the runner to the platform.
+   *
+   * The alternative — backgrounding it from a shell inside `exec` — depended on
+   * that shell's session outliving the call, and twice in the first five launches
+   * it did not: the runner was gone, had written nothing, and there was nothing
+   * left to ask. A process the platform owns can be asked.
+   */
+  async startProcess(command: string, options: StartProcessOptions): Promise<SandboxProcess> {
+    const started = await this.sandbox.startProcess(command, {
+      processId: options.id,
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      ...(options.env ? { env: options.env } : {}),
+    });
+    return this.wrapProcess(started);
+  }
+
+  async findProcess(id: string): Promise<SandboxProcess | null> {
+    const processes = await this.sandbox.listProcesses();
+    const found = processes.find((process) => process.id === id);
+    return found ? this.wrapProcess(found) : null;
+  }
+
+  private wrapProcess(process: { id: string }): SandboxProcess {
+    const sandbox = this.sandbox;
+    return {
+      id: process.id,
+      alive: async () => {
+        const current = (await sandbox.listProcesses()).find((p) => p.id === process.id);
+        // Absent means the platform has forgotten it, which for our purposes is
+        // the same as gone.
+        return current ? current.status === 'running' || current.status === 'starting' : false;
+      },
+      output: async () => {
+        const logs = await sandbox.getProcessLogs(process.id).catch(() => null);
+        if (!logs) return '';
+        return [logs.stdout, logs.stderr].filter(Boolean).join('\n');
+      },
+      kill: async () => {
+        await sandbox.killProcess(process.id).catch(() => {});
+      },
+    };
   }
 
   async writeFile(path: string, content: string): Promise<void> {

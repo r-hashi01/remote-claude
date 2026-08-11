@@ -357,6 +357,8 @@ for itself after 90 seconds without a heartbeat, or 8 minutes without output.
 - The agent runs non-interactively with permissions bypassed. Approval prompts
   are not available
 - Following a job is polling, not long polling
-- One failure mode is unexplained: a runner that starts, writes nothing and
-  stops. It is retried, and a launch marker was added so the next occurrence
-  distinguishes "the shell never ran" from "the runner said nothing" (RC-15)
+- A runner that started, wrote nothing and stopped was seen twice in the first
+  five launches. It was retried rather than explained, and then explained: the
+  runner had been backgrounded from a shell inside an exec, so it depended on
+  that shell's session outliving the call. It is a process the platform owns now,
+  with an id, which can be asked about instead of guessed at (RC-15)

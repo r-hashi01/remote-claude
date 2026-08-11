@@ -176,9 +176,20 @@ snapshot は settle 時・teardown の前に取り、TTL はジョブ記録の�
 
 **5回の起動のうち2回**これで落ちた（RC-11 を委譲したジョブを含む）。稀ではない。
 `shouldRetrySilentStartup` として実装し、status.json も出力も無い場合だけ requeue する。
-併せて **launch marker** を追加した（shell が runner を起動する前に `launched` を書く）。
-これで「shell が走ったが runner が黙っていた」と「shell 自体が走らなかった」が区別できる。
-**原因はまだ分かっていない。** marker は次に起きたときに切り分けるために入れた。
+併せて launch marker を追加して「shell が走ったか」を切り分けられるようにした。
+
+**追記 (2026-08-11): 原因に手を入れた。** 再試行と marker は検知であって修正ではなかった。
+
+runner は `setsid nohup node … &` を `exec` の中で背景化していた。つまり
+**その shell の session が exec より長生きすることに賭けていた。** Sandbox SDK には
+`startProcess`（プラットフォームがプロセスを所有し、`processId` を指定でき、
+status と logs を後から聞ける）があるので、そちらに置き換えた。
+
+marker は不要になった — **「shell が走ったか」を推測する代わりに、プラットフォームに
+「そのプロセスを知っているか」を聞ける。** 失敗メッセージも
+「記録が無い（起動していない）」と「まだ居るが何も出していない」を区別する。
+
+runner の stdout/stderr もファイルへのリダイレクトではなくプラットフォームが持つ。
 
 <details><summary>当初の記述</summary>
 
