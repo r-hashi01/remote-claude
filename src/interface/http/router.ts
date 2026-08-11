@@ -1,9 +1,22 @@
 import { ACP_PROTOCOL_VERSION } from '../../domain/agent/acp';
+import { Refusal } from '../../domain/job/errors';
 import type { ContinueRequest } from '../../application/job-service';
 import type { JobRequest } from '../../domain/job/record';
 import type { Env } from '../../infrastructure/env';
-import { probeClaudeAuth } from '../../infrastructure/health/claude-auth';
 import { authorize } from './auth';
+
+/**
+ * What this layer cannot do for itself.
+ *
+ * The auth probe runs a real prompt in a real sandbox, so it lives in the
+ * infrastructure. Passing it in rather than importing it keeps the arrows
+ * pointing inward (ADR 0008) — and is how this file came to have tests: the
+ * import dragged the container SDK in with it, which does not load outside
+ * workerd, which meant the layer deciding who gets in could not be exercised.
+ */
+export interface RouteDeps {
+  probeClaudeAuth: (env: Env) => Promise<Response>;
+}
 
 /**
  * The HTTP surface.
@@ -13,7 +26,7 @@ import { authorize } from './auth';
  * all it does — the rules live in `src/domain`, the orchestration in
  * `src/application`.
  */
-export async function route(request: Request, env: Env): Promise<Response> {
+export async function route(request: Request, env: Env, deps: RouteDeps): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, '') || '/';
   const method = request.method.toUpperCase();
@@ -61,7 +74,7 @@ export async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === '/health/auth' && method === 'GET') {
-    return await probeClaudeAuth(env);
+    return await deps.probeClaudeAuth(env);
   }
 
   // ---- ACP session surface ------------------------------------------
@@ -94,7 +107,7 @@ export async function route(request: Request, env: Env): Promise<Response> {
     if (suffix === '/prompt' && method === 'POST') {
       const body = await readJson<{ text?: string }>(request);
       const text = (body.text ?? '').trim();
-      if (!text) throw new Error('text is required');
+      if (!text) throw new Refusal('text is required');
       return Response.json(await session.prompt(sessionId as string, text), { status: 202 });
     }
 
@@ -161,11 +174,11 @@ function notFound(): Response {
 async function readJson<T>(request: Request): Promise<T> {
   const contentType = request.headers.get('content-type') ?? '';
   if (!contentType.includes('application/json')) {
-    throw new Error('content-type must be application/json');
+    throw new Refusal('content-type must be application/json');
   }
   try {
     return (await request.json()) as T;
   } catch {
-    throw new Error('invalid JSON body');
+    throw new Refusal('invalid JSON body');
   }
 }

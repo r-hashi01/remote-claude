@@ -14,7 +14,7 @@
 > 訂正履歴: 当初 RC-2 を P0 に置いたが、根拠とした観測が誤りだったため P1 へ降格した。
 > 詳細は当該項目に残す。**実用の分かれ目は RC-1 のみ。**
 
-### RC-1. 実行モデルの是正（パイプラインをコンテナ内へ）
+### ~~RC-1. 実行モデルの是正（パイプラインをコンテナ内へ）~~ → 対応済み（ADR 0004）
 
 **観測**: 51.5秒のジョブは完走。それを超えると `sandbox_runs.status = running` / `ended_at = null`
 のまま落ちる（`execute()` の `finally` に到達しない）。`limits.cpu_ms` を上限の5分にしても解消せず。
@@ -48,27 +48,28 @@
 60秒の alarm を保険とする。**効果は未検証**（そもそも観測手段が上記のとおり
 当てにならないため、検証方法から考え直す必要がある）。
 
-### RC-3. 一過性エラーのリトライ
+### ~~RC-3. 一過性エラーのリトライ~~ → 対応済み
 
 **観測**: `Sandbox operation sandbox.exec was interrupted while the platform was updating the
 sandbox runtime` で1件失敗。Cloudflare 側のイベントであり、こちらのバグではない。
 
-**やること**: プラットフォーム由来と判別できるエラーは、ジョブ単位で自動リトライする（回数上限つき）。
-ユーザーのプロンプトを再実行するので、冪等性の観点から**最大1回**に留める。
-
-**完了条件**: 同種のエラーでジョブが失敗しない。
+**やったこと**: runner 起動前だけ再試行する（ADR 0006）。起動後はプロンプトの再実行になるため対象外。
+判定は `was interrupted while` を含む言い回しで、**実際に観測した2つの文言**をテストに引用してある。
+加えて「起動したが何も報告せず死んだ」も再試行する（RC-15）。
 
 ---
 
 ## P1 — これが無いと使い続けるのが辛い
 
-### RC-4. Workspace キャッシュの有効化
+### ~~RC-4. Workspace キャッシュの有効化~~ → RC-10 / ADR 0011 に統合
 
 **観測**: `install` に毎回 15〜27秒。clone も毎回。実装済みだが既定 off。
 
-**やること**: R2 バックアップ/リストアを有効化し、実測する。効果が出なければ off に戻して理由を残す。
+**決着**: 速度のためのキャッシュではなく、**ジョブを継続するための持ち越し**として配線した
+（RC-10 / ADR 0011）。`node_modules` は運ばないので install は毎回走る — 継続の目的は
+作業ツリーと会話であって、時間短縮ではない。
 
-### RC-5. ログの取りこぼし解消
+### ~~RC-5. ログの取りこぼし解消~~ → 解決済み
 
 **観測**: バッファリング導入後、DO が落ちるとバッファ内の行が失われ、
 **失敗が実際より早い時点で起きたように見えた**。デバッグを誤らせた。
@@ -262,12 +263,27 @@ RC-9（publish）が入れば解ける。
 `.mjs` なので TS package をそのまま import できないのが理由だが、`npm run sdk:build` 後の
 `sdk/dist` は import できる。SDKの最初の利用者が自分自身でないのは、契約検査の穴になる。
 
-### RC-13. interface 層のテスト
+### ~~RC-13. interface 層のテスト~~ → 対応済み
 
 **観測**: `domain` と `application` は146件で覆われているが、`interface/http` は0件。
 `authorize()` は fail-closed（token未設定なら503）が要で、そこを固定したい。
 ただし `crypto.subtle.timingSafeEqual` は workerd 固有で、いまの vitest (node) では走らない。
-**やること**: `@cloudflare/vitest-pool-workers` を足すか、比較関数をポートにする。
+**やったこと**: pool-workers は足さなかった。`crypto.subtle.timingSafeEqual` を
+**「あれば使う、無ければ手で XOR を積む」**形にした（`AbortSignal.any` に同じ前例がある）。
+これで node の vitest でも走る。
+
+書いてみて**3つ見つかった**:
+
+1. **`router.ts` が infrastructure を直接 import していた**（auth probe）。ADR 0008 の
+   「矢印は内向きだけ」に反していて、そのせいで container SDK が引きずられ、
+   **このファイルはテストできなかった**。probe は entry から渡す形にした
+2. **`Refusal` 型への切り替えで、呼び出し側の誤り3つが 400 から 500 に落ちていた**
+   （`content-type must be...` / `invalid JSON body` / `text is required`）。
+   正規表現をやめたときに拾い漏れていた。**テストが捕まえた**
+3. 「token 未設定なら 503」という**いちばん重要な性質を誰も確かめていなかった**
+
+テスト36件（auth / errors / router）。`jobs` と `tasks` の両方で返すこと、`id` と `jobId` の両方、
+diff が無いときは 404（空の patch ではない）といった**利用者が依存している形**も固定した。
 
 ### RC-9. SDK の publish
 
