@@ -126,9 +126,6 @@
     // the App installation, not by editing a list here.
     "ALLOW_CUSTOM_REPO": "true",
 
-    // "off" | "on". "on" additionally requires the R2 config below.
-    "WORKSPACE_CACHE": "off",
-    "WORKSPACE_CACHE_TTL": "604800",
 
     // Outbound allowlist for the sandbox. Everything else is dropped.
     "SANDBOX_ALLOWED_HOSTS": "github.com,codeload.github.com,api.github.com,objects.githubusercontent.com,api.anthropic.com,registry.npmjs.org,pypi.org,files.pythonhosted.org,proxy.golang.org,crates.io,static.crates.io",
@@ -165,12 +162,14 @@
     "BUILD_COMMAND": ""
   }
 
-  // --- Optional: workspace caching via R2 (WORKSPACE_CACHE=on) -----------
+  // --- Optional: keeping workspaces so jobs can be continued (ADR 0011) ---
   // Uncomment this block, create the bucket, then set the two R2 secrets.
   // Not wired: nothing in the job path calls it. See docs/operating.md
   // ("Known limits") and roadmap RC-10, which decides whether to connect or delete it.
   //
-  // ,"r2_buckets": [
-  //   { "binding": "BACKUP_BUCKET", "bucket_name": "remote-claude-cache" }
-  // ]
+  // Keeping a finished job's workspace, so a follow-up turn can continue it
+  // (ADR 0011). Create the bucket, then add BACKUP_BUCKET to r2_buckets above:
+  //   npx wrangler r2 bucket create remote-claude-workspaces
+  //   { "binding": "BACKUP_BUCKET", "bucket_name": "remote-claude-workspaces" }
+  // With no bucket bound, jobs run normally and simply cannot be continued.
 }

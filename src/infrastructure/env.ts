@@ -44,7 +44,13 @@ export interface Env extends Secrets {
   /** Job artifacts: patch and result bodies. */
   ARTIFACTS: R2Bucket;
 
-  // --- Optional R2 binding (WORKSPACE_CACHE=on) ---
+  /**
+   * Where a finished job's workspace is kept so it can be continued.
+   *
+   * Optional, and the only switch: a deployment with no bucket bound keeps no
+   * workspaces. There is deliberately no separate flag, because a flag and a
+   * binding can disagree — and this one did, for as long as it existed.
+   */
   BACKUP_BUCKET?: R2Bucket;
 
   // --- Secrets (wrangler secret put / .dev.vars) ---
@@ -66,8 +72,6 @@ export interface Env extends Secrets {
   SANDBOX_SLEEP_AFTER?: string;
   ALLOW_PUSH?: string;
   ALLOW_CUSTOM_REPO?: string;
-  WORKSPACE_CACHE?: string;
-  WORKSPACE_CACHE_TTL?: string;
   SANDBOX_ALLOWED_HOSTS?: string;
   INSTALL_COMMAND?: string;
   LINT_COMMAND?: string;

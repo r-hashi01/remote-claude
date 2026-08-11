@@ -15,8 +15,6 @@ import type { Env } from './env';
  */
 export interface Config extends ExecutorPolicy {
   claudeAuthMode: 'proxy' | 'direct';
-  workspaceCache: boolean;
-  workspaceCacheTtl: number;
   allowedHosts: string[];
 }
 
@@ -60,8 +58,6 @@ export function loadConfig(env: Env): Config {
     sleepAfter: env.SANDBOX_SLEEP_AFTER || '5m',
     allowPush: bool(env.ALLOW_PUSH),
     allowCustomRepo: bool(env.ALLOW_CUSTOM_REPO),
-    workspaceCache: (env.WORKSPACE_CACHE ?? 'off').trim().toLowerCase() === 'on',
-    workspaceCacheTtl: num(env.WORKSPACE_CACHE_TTL, 7 * 24 * 60 * 60),
     allowedHosts: parseAllowedHosts(env),
     commands: {
       install: (env.INSTALL_COMMAND ?? '').trim(),

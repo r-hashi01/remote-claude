@@ -169,7 +169,6 @@ npx wrangler deploy
 | `ALLOW_CUSTOM_REPO` | `true` | Whether a job may name another repository |
 | `SANDBOX_ALLOWED_HOSTS` | see below | Everything else is blocked |
 | `INSTALL_COMMAND`, `LINT_COMMAND`, `TEST_COMMAND`, `BUILD_COMMAND` | `""` | Defaults for `REPO_URL`; any job may override them |
-| `WORKSPACE_CACHE`, `WORKSPACE_CACHE_TTL` | `off` | **Read and never used** — see [Known limits](#known-limits) |
 
 Default allowed hosts: `github.com`, `codeload.github.com`, `api.github.com`,
 `objects.githubusercontent.com`, `api.anthropic.com`, `registry.npmjs.org`.
@@ -199,6 +198,31 @@ The executor asks GitHub what the installation may actually do rather than
 trusting the switch, so a missing permission is a 400 naming it. Pushing happens
 only when something was committed, and a push that fails does not fail the job —
 the patch is still there.
+
+## Continuing a job
+
+A job that stops to ask a question is answered by continuing it, not by starting
+over — see [ADR 0011](adr/0011-continue-a-job-rather-than-steer-it.md). That
+needs the tree it left and the conversation that produced it, so when a job
+settles its workspace is stored and the record points at it.
+
+**The binding is the switch.** Bind an R2 bucket as `BACKUP_BUCKET` and
+workspaces are kept for as long as the job record is (seven days); bind nothing
+and jobs run exactly as before and simply cannot be continued. There is no
+separate flag, because a flag and a binding can disagree — and the one that used
+to be here did, for as long as it existed.
+
+```bash
+npx wrangler r2 bucket create remote-claude-workspaces
+# then add to r2_buckets in wrangler.jsonc:
+#   { "binding": "BACKUP_BUCKET", "bucket_name": "remote-claude-workspaces" }
+```
+
+What travels is the working tree and the conversation beside it, with
+`.gitignore` respected — so not `node_modules`, which a continuation reinstalls.
+Failing to keep a workspace never fails a job that has already produced its diff.
+Failing to *restore* one does fail the job that asked for it, because continuing
+from a fresh clone would look like continuing and behave like starting over.
 
 ## Sandbox lifecycle
 
@@ -276,9 +300,6 @@ for itself after 90 seconds without a heartbeat, or 8 minutes without output.
 
 ## Known limits
 
-- **The workspace cache is not wired.** `WORKSPACE_CACHE` is read and the
-  provider implements snapshot and restore, but no job path calls it: every job
-  is a fresh clone. Roadmap RC-10 decides whether to connect it or delete it
 - Queued jobs do not survive a Worker restart; they are not a durable queue
 - Job history is kept for 7 days; logs are capped at 20,000 lines
 - The agent runs non-interactively with permissions bypassed. Approval prompts
