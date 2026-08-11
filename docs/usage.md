@@ -210,6 +210,22 @@ It is refused, rather than quietly turned into a fresh start, when:
 | the deployment kept no workspace | no bucket is bound, or it has expired — they live as long as the job record |
 | the job never started a conversation | it stopped before the agent ran. Submit a new job instead |
 
+In practice, the executor prints two lines the job itself never sees:
+
+```text
+[system] restoring the workspace of the job this continues
+[system] continuing job msongqis-a3d49fe9 on claude/msongqis-a3d49fe9
+```
+
+That confirms the workspace was restored and the run picked up the same job id
+on the same branch — nothing about the conversation. Whether it actually
+resumed is a different claim, and log lines cannot carry it: it only checks out
+if the second turn answers what the first one asked, without being re-told.
+This paragraph is that check. The job that wrote this section stopped to offer
+two ways to show continuation and asked which one to write; the answer came
+back as a follow-up turn that picked the question back up on its own — the
+same job id as the log lines above.
+
 ## Another repository
 
 A deployment has one configured repository and will work on others when
