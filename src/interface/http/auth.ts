@@ -4,7 +4,8 @@ import type { Env } from '../../infrastructure/env';
  * Shared-secret bearer auth.
  *
  * This is the last line of defence, not the only one — put the Worker behind
- * Cloudflare Access as well (see README). A missing secret fails closed: the API
+ * Cloudflare Access as well (see docs/operating.md). A missing secret fails
+ * closed: the API
  * is never reachable without authentication.
  */
 export function authorize(request: Request, env: Env): Response | null {

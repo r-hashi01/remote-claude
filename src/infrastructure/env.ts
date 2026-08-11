@@ -28,7 +28,7 @@ export interface Secrets {
   CLAUDE_CODE_OAUTH_TOKEN?: string;
   /** Shared bearer token guarding this Worker's API. */
   REMOTE_CLAUDE_TOKEN?: string;
-  /** GitHub App private key (PEM, PKCS#8 — see README). */
+  /** GitHub App private key (PEM, PKCS#8 — see docs/operating.md). */
   GITHUB_APP_PRIVATE_KEY?: string;
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;

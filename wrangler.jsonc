@@ -45,7 +45,7 @@
       "class_name": "Sandbox",
       "image": "./Dockerfile",
       // "basic" matches Cloudflare's official Claude Code example.
-      // Bump to "standard" if heavy builds get OOM-killed (see README).
+      // Bump to "standard" if heavy builds get OOM-killed (see docs/operating.md).
       "instance_type": "basic",
       // Hard platform-level ceiling on cost. Keep >= MAX_CONCURRENCY.
       "max_instances": 3
@@ -167,7 +167,8 @@
 
   // --- Optional: workspace caching via R2 (WORKSPACE_CACHE=on) -----------
   // Uncomment this block, create the bucket, then set the two R2 secrets.
-  // See README "Workspace cache (phase 2)".
+  // Not wired: nothing in the job path calls it. See docs/operating.md
+  // ("Known limits") and roadmap RC-10, which decides whether to connect or delete it.
   //
   // ,"r2_buckets": [
   //   { "binding": "BACKUP_BUCKET", "bucket_name": "remote-claude-cache" }

@@ -1,0 +1,303 @@
+# Using remote-claude
+
+The reference for running jobs. If you are setting a deployment up or keeping it
+running, see [Operating it](operating.md) instead.
+
+- [A job, end to end](#a-job-end-to-end)
+- [Three ways in](#three-ways-in)
+- [Job options](#job-options)
+- [Reading the result](#reading-the-result)
+- [Getting the change out](#getting-the-change-out)
+- [Another repository](#another-repository)
+- [Writing a prompt that survives one shot](#writing-a-prompt-that-survives-one-shot)
+- [When something fails](#when-something-fails)
+- [Interactive sessions (ACP)](#interactive-sessions-acp)
+- [HTTP API](#http-api)
+
+## A job, end to end
+
+```text
+queued → starting → running → completed
+                            ↘ failed
+                            ↘ cancelled
+```
+
+`queued` means the concurrency limit is full; the queue is served oldest first.
+Everything after that happens inside one container, which is destroyed when the
+job settles:
+
+| Step | What it is |
+| --- | --- |
+| clone | Done by the Worker, because it needs a credential the container must never see |
+| `verify-no-api-key` | Refuses to run if an Anthropic API key is present. This environment is subscription-only |
+| `git-branch` | `claude/<job-id>`, cut from the base branch. `main` is never touched |
+| `install` | Your install command. **Runs even with `skipChecks`** |
+| `claude-code` | The agent, non-interactive, with permissions bypassed |
+| `lint`, `test`, `build` | Your commands. Failures are reported, not fatal — the diff is still worth having |
+| `git-commit` | Only if something changed |
+| `git-push` | Only when asked, and only if something was committed |
+| collect | `git status`, `git diff --stat`, and the patch |
+
+The agent is told not to commit, push, or rewrite history: the pipeline around it
+does that, so that what it changed and what was recorded cannot disagree.
+
+## Three ways in
+
+**The CLI**, for a person at a terminal:
+
+```bash
+remote-claude "<prompt>"              # start a job and follow it
+remote-claude run "<prompt>" [opts]   # the same, explicitly
+remote-claude status <job-id>
+remote-claude logs <job-id> [-f]
+remote-claude diff <job-id>
+remote-claude apply <job-id>          # apply the patch to the working tree
+remote-claude cancel <job-id>
+remote-claude list
+remote-claude sandboxes               # what is allocated and not reclaimed
+remote-claude health [--auth]
+remote-claude ui [--port N]           # a local dashboard
+```
+
+**The SDK**, for a program — see [sdk/README.md](../sdk/README.md):
+
+```bash
+npm i @r-hashi01/remote-claude-client
+```
+
+```ts
+const rc = createClient({ url, token });
+const job = await rc.startJob({ prompt: 'fix the flaky test' });
+const finished = await rc.waitForJob(job.id, { onLog: (lines) => … });
+```
+
+`waitForJob` resolves on failure and cancellation too — those are outcomes, not
+exceptions. It waits out transient failures (5xx, 429, a dropped connection),
+which matters because deploying the executor restarts the object coordinating
+jobs while the jobs themselves keep running.
+
+**HTTP**, if you must — see [below](#http-api). Every call carries
+`Authorization: Bearer $REMOTE_CLAUDE_TOKEN` except `/health`.
+
+## Job options
+
+| Option | CLI | Default | What it does |
+| --- | --- | --- | --- |
+| `prompt` | positional | — | Required. Up to 20,000 characters |
+| `baseBranch` | `--base` | the deployment's `DEFAULT_BASE_BRANCH` | What to branch from |
+| `branch` | — | `claude/<job-id>` | Work on a named branch instead |
+| `repo` | — | the deployment's `REPO_URL` | [Another repository](#another-repository) |
+| `commands` | — | the deployment's | [Per-job commands](#per-job-commands) |
+| `skipChecks` | `--skip-checks` | `false` | Skip lint/test/build. **Not install** |
+| `push` | `--push` | `false` | Push the work branch |
+| `pullRequest` | `--pr` | — | Push and open a pull request |
+| `keepSandbox` | `--keep` | `false` | Leave the container up for 30 minutes to look at |
+
+### Per-job commands
+
+The deployment configures install/lint/test/build for the repository it is
+pointed at. Any job may replace them, and a job against another repository
+effectively has to:
+
+```jsonc
+{
+  "prompt": "...",
+  "commands": {
+    "install": "npm ci --no-audit --no-fund",
+    "lint": "npm run typecheck",
+    "test": "npm test",
+    "build": ""            // an empty string means "skip this step"
+  }
+}
+```
+
+Keys you leave out inherit the deployment's. An empty string is an instruction —
+skip — while an absent key is not one.
+
+This exists because `skipChecks` does not cover `install`, so a job carrying the
+wrong install command fails no matter what. That was found by the first job this
+executor ran against a repository other than its own.
+
+## Reading the result
+
+```bash
+remote-claude status <job-id>
+```
+
+```text
+status   completed
+usage    28 in / 9719 out, 21 turns, $0.6438
+branch   claude/msngvwat-27d64bed (pushed)
+pr       https://github.com/owner/repo/pull/14
+changed  yes (a78ec21b)
+lint     ok
+test     skip
+
+  packages/spindle-core/drizzle.config.ts | 4 ++--
+
+--- claude ---
+<the agent's closing message>
+```
+
+Four surfaces, in increasing detail: `status` for the summary above, `diff` for
+the patch, `logs` for everything the container printed, and `remote-claude ui`
+for a dashboard — which only opens on a machine holding the token.
+
+**The agent's closing message is a summary, not an audit.** It is what the thing
+under review said about itself. What actually changed is only in the diff, and
+whether the checks passed is in the steps, which the executor ran itself.
+
+Every line is redacted before it is stored: known secret values, plus patterns
+for `sk-ant-*`, `ghp_*` / `ghs_*` / `github_pat_*`, `Authorization:` headers, and
+credentials embedded in URLs. Logs are capped at 20,000 lines per job and kept
+for seven days.
+
+## Getting the change out
+
+By default the executor commits inside the sandbox and hands back a patch:
+
+```bash
+remote-claude diff <job-id>            # read it
+remote-claude apply <job-id> --check   # would it apply?
+remote-claude apply <job-id>           # apply it
+```
+
+With `--push` it pushes `claude/<job-id>`. With `--pr` it pushes and opens a pull
+request, which is the only route where seeing the result needs nothing installed
+locally:
+
+```jsonc
+{ "pullRequest": {} }
+{ "pullRequest": { "title": "P0-4: wire a Task to a sandbox run", "draft": true } }
+```
+
+Every field is optional. Omitted, the executor writes the title from the prompt's
+first line and the body from the request, the diffstat, and the checks that
+actually ran — deliberately not from the agent's closing message.
+
+A pull request that cannot be opened does not fail the job: the branch is pushed,
+so the work exists, and the log says to open one by hand.
+
+Both need the deployment to allow pushing *and* the credential to permit it; see
+[Operating it](operating.md#pushing-and-pull-requests). Missing either is a 400
+at submission, naming which one.
+
+## Another repository
+
+A deployment has one configured repository and will work on others when
+`ALLOW_CUSTOM_REPO` is on — which it is by default:
+
+```jsonc
+{ "prompt": "...", "repo": "https://github.com/acme/app.git", "commands": { "install": "npm ci" } }
+```
+
+What may be worked on is not a list in the configuration. It is **whatever the
+deployment's GitHub App installation can reach**, and the executor asks GitHub
+before accepting the job, so a repository nobody granted it fails immediately
+rather than during the clone ([ADR 0010](adr/0010-the-credential-defines-the-repositories.md)).
+The URL must still be `https` on `github.com` with no embedded credentials.
+
+To narrow what a deployment can touch, remove repositories from the App
+installation. The CLI has no `--repo`; use the SDK or HTTP.
+
+## Writing a prompt that survives one shot
+
+A job runs once. Nobody can answer a question halfway through, and the agent
+cannot change direction after it starts. Three things make the difference:
+
+1. **What to change** — name files, or at least a layer.
+2. **What "done" means** — something the agent can check inside the sandbox.
+   Prefer stating it as commands: if `test` is configured, the executor runs it
+   and records the result, so "the tests pass" becomes an observation rather
+   than a claim.
+3. **What not to touch** — the cheapest way to avoid a diff you have to unpick.
+
+The repository's own `AGENTS.md` or `CLAUDE.md` is read by the agent, so house
+rules belong there rather than in every prompt.
+
+Work that does not survive one shot: anything needing a decision you have not
+made, anything where discovering the answer changes the plan, and anything
+requiring a credential the sandbox deliberately lacks — deploying, for one.
+
+## When something fails
+
+The executor's messages are written to say what to do about them. They are worth
+passing on verbatim.
+
+| Message | What happened | What to do |
+| --- | --- | --- |
+| `runner stopped responding during "<phase>"` | The process in the container died. The runner's own output follows, if it produced any | Read the output. Out of memory means a smaller job |
+| `no output for N minutes during "<phase>"; presumed stuck` | Alive but producing nothing | Usually a very long step. The runner reports steps that go quiet for a minute, so real silence means it stopped |
+| `job exceeded <n>ms` | Past the total budget | Split the work |
+| `step "install" failed` | The install command does not fit this repository | Pass `commands.install` |
+| `this executor is pinned to <A> and will not run against <B>` | `ALLOW_CUSTOM_REPO` is off **on the deployment** | Not a bug in whatever called it. Change the deployment or the target |
+| `installation cannot reach <owner/name>` | The GitHub App was never given that repository | Add it: GitHub → Settings → Applications → Configure → Repository access |
+| `pushing is disabled on it` | `ALLOW_PUSH` is off on the deployment | Fetch the diff, or turn it on |
+| `cannot write to <owner/name>` | The App's Contents permission is read-only | Raise it, and accept the change on the installation |
+| `cloning ... at branch "<x>" failed` | No such branch, or no access | Check the base branch |
+
+Platform hiccups are retried by the executor before the runner starts, and only
+there: once the runner is up, retrying would re-run your prompt. A job that
+starts, reports nothing at all and stops is also retried, because a runner that
+wrote neither a status nor a line of output cannot have executed anything.
+
+Failed jobs keep their usage and their closing message; `status` still shows them.
+
+## Interactive sessions (ACP)
+
+Alongside one-shot jobs there is a multi-turn session compatible with
+[Agent Client Protocol](https://agentclientprotocol.com) v1, so an editor can
+drive Claude Code in the sandbox as though it were local:
+
+```text
+editor ──ACP/stdio──▶ cli/acp-bridge.mjs ──HTTPS+SSE──▶ Worker ──▶ Sandbox
+```
+
+The remote leg is this project's own SSE stream, because ACP's remote transport
+is still a proposal; when it lands, only the bridge changes.
+
+A session takes a repository the same way a job does — `POST /acp/sessions`
+accepts `repo` and `baseBranch`, resolved by the same rules — clones it once, and
+reuses that working tree across turns, resuming Claude Code's own session so the
+context survives.
+
+Implemented: `initialize`, `session/new`, `session/prompt`, `session/cancel`, and
+`session/update` for messages, thoughts, tool calls, plans (TodoWrite becomes an
+ACP plan) and usage. Not implemented: `session/request_permission`, `fs/*`,
+`terminal/*`, `session/load`. Sessions are not connected to the job queue.
+
+## HTTP API
+
+Every call needs `Authorization: Bearer $REMOTE_CLAUDE_TOKEN` except `/health`.
+
+| Method | Path | |
+| --- | --- | --- |
+| `POST` | `/jobs` | Start a job. Returns the record with `202` |
+| `GET` | `/jobs?limit=20&summary=1` | Recent jobs. `summary=1` drops each step's captured output |
+| `GET` | `/jobs/:id` | One job, including `result` and `usage` |
+| `GET` | `/jobs/:id/logs?since=<seq>` | Logs. `format=text` for plain text |
+| `GET` | `/jobs/:id/diff` | The patch, or `404` while there is none |
+| `POST` | `/jobs/:id/cancel` | Cancel |
+| `GET` | `/sandboxes` | What this deployment allocated, and whether it got it back |
+| `GET` | `/health` | Unauthenticated liveness |
+| `GET` | `/health/auth` | Runs one prompt to prove Claude authentication works |
+| `POST` | `/acp/sessions` | Create a session, optionally with `repo` / `baseBranch` |
+| `GET` | `/acp/sessions/:id/stream?since=<n>` | SSE |
+| `POST` | `/acp/sessions/:id/prompt` | One turn |
+| `POST` | `/acp/sessions/:id/cancel` | Cancel the turn |
+| `DELETE` | `/acp/sessions/:id` | End the session |
+
+```bash
+curl -X POST https://remote-claude.<subdomain>.workers.dev/jobs \
+  -H "authorization: Bearer $REMOTE_CLAUDE_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"prompt": "fix the flaky test", "pullRequest": {}}'
+```
+
+The create response is the whole job record. It also carries `jobId`, which is
+what this endpoint has always called the id; **new code should read `id`**, the
+name every other endpoint uses. `GET /jobs` likewise returns the same array under
+both `jobs` and `tasks`.
+
+Errors are `{"error": "..."}`. A 400 means the request or the deployment's
+configuration — the message says which — and a 401 means the token.
