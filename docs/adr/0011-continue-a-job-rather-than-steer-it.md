@@ -109,3 +109,26 @@ snapshot が失敗していた。そして**失敗した理由はどこにも残
    継続ジョブは restore 直後に pipeline を走らせ、終わったら再 snapshot するので成立するが、
    **継続ターンの最中に container が sleep したら workspace は消える。**
    2秒ごとの poll が活動として効いているが、これは前提であって保証ではない。
+
+## 追記2 (2026-08-11) — 3回目と4回目
+
+継続を通すまでに、ジョブを4本使った。**毎回エラーが1段深くなった**のが記録として価値がある。
+
+| 回 | 出たもの | 実際に足りなかったもの |
+|---|---|---|
+| 1 | `kept no workspace`（拒否は 500）| snapshot が失敗していたが**理由が飲まれていた** |
+| 2 | `Missing: ...` 4つ全部 | 4つ必要だと分かった（2つだと書いていた）|
+| 3 | `Missing: R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY` | secret は**存在するが空**だった |
+| 4 | `Presigned URL upload failed: curl (22) 520` | **許可リストに R2 のエンドポイントが無かった** |
+
+4回目が示したのは、**ある機能を有効にすると、別の判断が閉じた穴を開ける必要が出る**ということ。
+container のネットワークは deny-by-default（ADR 0002 の姿勢）で、workspace の持ち越しは
+その中から自分の R2 へ上げる。設定項目を1つ増やす選択もあったが、**導出した** —
+「workspace を保持する deployment は自分の R2 に到達できなければならない」は設定ではなく事実。
+
+`CLOUDFLARE_ACCOUNT_ID` があるとき `<account>.r2.cloudflarestorage.com` を許可リストに加える。
+明示的に R2 ホストが書かれていれば触らない。
+
+3回目の教訓も書いておく: **`wrangler secret put` は空入力でも成功と表示する。**
+そして SDK 側は `!value` で判定するので、**空の secret は未設定と完全に同じに見える。**
+今日3度目の「値が存在するが効かない」だった（`ALLOW_PUSH`、`WORKSPACE_CACHE`、そして空 secret）。
