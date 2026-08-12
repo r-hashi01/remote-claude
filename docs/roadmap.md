@@ -339,16 +339,28 @@ lint・test まで完走。1回目のコンテナは差し替えられたが**�
 `SANDBOX_PROVIDER` 不明、GitHub App 未設定、秘密鍵が base64 でない、PKCS#8 でない。
 **どれも「セットアップで最初に踏む所」が 500 で返っていた。**
 
-### RC-12. CLI と dashboard を SDK に載せ替える
+### ~~RC-12. CLI と dashboard を SDK に載せ替える~~ → 対応済み
 
-**追加の理由**: CLI が一過性エラーの再試行を持つようになり、**SDK と同じ規則が2箇所になった**
-（型2 そのもの）。CLI が `sdk/dist` を import できないのは依存ゼロを保っているためで、
-RC-9（publish）が入れば解ける。
+**観測**: `sdk/` を出した目的は「利用者がHTTPを手書きしない」ことなのに、
+**このリポジトリ自身の CLI と dashboard が独自の fetch を持っていた。**
+さらに CLI が一過性エラーの再試行を持ったことで、**同じ規則が2箇所**になった（型2）。
 
-**観測**: `sdk/` を出した目的は「利用者がHTTPを手書きしない」ことだが、
-**このリポジトリ自身の CLI (`cli/remote-claude.mjs`) と dashboard が独自の fetch を持っている。**
-`.mjs` なので TS package をそのまま import できないのが理由だが、`npm run sdk:build` 後の
-`sdk/dist` は import できる。SDKの最初の利用者が自分自身でないのは、契約検査の穴になる。
+**publish 待ちではなかった。** blocker は「CLI は依存ゼロだから import できない」だったが、
+依存ゼロは文書化された約束ではなく自己制約で、SDK のソースは `.js` 拡張子付きで
+import しているため `sdk/dist` は**バンドラ無しでそのまま読める**。
+`file:./sdk` を root の依存に置き、`npm install` 後に必ず揃うよう root の `prepare` で
+ビルドする形にした（RC-9 の publish には依存しない）。
+
+- 手書きの `api()` / `request()` / `TRANSIENT_RETRIES` / `TERMINAL` を削除
+- `follow()` は `waitForJob` になった。カーソルを進める条件、終端後の tail 回収、
+  deploy 中の 500 耐性は**すべて SDK 側の1箇所**になる
+- `logs`（非 follow）は `format=text` をやめて follow と同じページング経路にした
+- dashboard は build を持たないので、終端ステータスの集合だけを**配信時に注入**する。
+  384行の読み取り専用ページのために node_modules を配るのは重複より悪い
+- ビルドが無いときは、解決エラーではなく**打つべきコマンド**を出す
+
+**検証**: 実 Worker に対して health / list / status / logs / logs -f / diff / sandboxes、
+および 404 と 401 の経路を通した。
 
 ### ~~RC-13. interface 層のテスト~~ → 対応済み
 

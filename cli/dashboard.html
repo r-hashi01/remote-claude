@@ -156,7 +156,11 @@
 
   var LIST_MS = 3000;
   var DETAIL_MS = 1500;
-  var TERMINAL = { completed: 1, failed: 1, cancelled: 1 };
+  // Substituted by the server from the client package, so which statuses are
+  // final is stated once for the CLI, the SDK and this page. The literal here is
+  // the fallback for opening this file directly, and is why the marker exists at
+  // all rather than the page fetching the list.
+  var TERMINAL = /*__TERMINAL_STATUSES__*/ { completed: 1, failed: 1, cancelled: 1 };
 
   var selected = null;
   var since = 0;

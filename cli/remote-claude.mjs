@@ -2,9 +2,15 @@
 /**
  * remote-claude — thin client for the Cloudflare-hosted Claude Code runner.
  *
- * Deliberately dependency-free and I/O-only: it never runs Claude Code, git
- * operations against the working tree (except `apply`), or Docker locally.
- * All compute happens in the Cloudflare Sandbox.
+ * I/O-only: it never runs Claude Code, git operations against the working tree
+ * (except `apply`), or Docker locally. All compute happens in the Cloudflare
+ * Sandbox.
+ *
+ * Built on the same client package published for everyone else. It used to hand-
+ * write its own fetch, which meant this repository's own tool was not the first
+ * consumer of the thing this repository ships — and the transient-retry rule
+ * ended up living here *and* in the SDK, the recurring defect of one rule in two
+ * places. Whatever a consumer would trip over, this trips over first.
  */
 
 import { readFileSync } from 'node:fs';
@@ -13,6 +19,23 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
+
+// Resolved through node_modules, where `file:./sdk` links the in-repo package.
+// Reported by hand because a missing build reaches the user as a module
+// resolution error naming a path they never typed.
+let sdk;
+try {
+  sdk = await import('@r-hashi01/remote-claude-client');
+} catch (error) {
+  process.stderr.write(
+    'remote-claude: the client package is not built.\n' +
+      '  npm install          (builds it as part of installing)\n' +
+      '  npm run sdk:build    (rebuilds it on its own)\n' +
+      `  ${error.message}\n`
+  );
+  process.exit(2);
+}
+const { createClient, isTerminal, ExecutorError } = sdk;
 
 // The CLI is repository-agnostic: it acts on wherever you invoke it from.
 const REPO_ROOT = process.cwd();
@@ -47,7 +70,6 @@ Configuration (first match wins):
   file ~/.config/remote-claude/config.json
 `.trim();
 
-const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 
 // ---------------------------------------------------------------- config
 
@@ -100,76 +122,29 @@ function loadConfig() {
   return { url: url.replace(/\/+$/, ''), token };
 }
 
-// ------------------------------------------------------------------ http
+// ---------------------------------------------------------------- client
 
 /**
- * How many polls in a row may fail transiently before giving up.
+ * How long between polls while following a job.
  *
- * Deploying the worker resets the Durable Object that coordinates jobs, and the
- * next request answers 500 "Durable Object reset because its code was updated".
- * The job is unaffected — it runs in a container — so dying here reported a
- * healthy job as a failure. The SDK had the same hole; this is the same fix.
- *
- * And it is now the same rule in two places, which is the other recurring defect
- * in this repository. It stays that way only until this CLI is built on the SDK
- * (roadmap RC-12); it cannot import it today because the CLI is dependency-free
- * and `sdk/dist` is a build artifact.
+ * Tighter than the SDK's two-second default because a person is watching this
+ * one. How many failures in a row are survivable, and which failures count, is
+ * the SDK's to decide — that rule was written here as well until this file
+ * stopped hand-writing its own transport.
  */
-const TRANSIENT_RETRIES = 5;
+const FOLLOW_INTERVAL_MS = 1_500;
 
-async function api(config, path, { method = 'GET', body, raw = false, retries = 0 } = {}) {
-  for (let attempt = 0; ; attempt += 1) {
-    const outcome = await request(config, path, { method, body, raw });
-    if (outcome.ok) return outcome.value;
-
-    // A rejected token or a missing job will answer the same way forever; only
-    // server-side and transport failures are worth asking again.
-    const worthRetrying = outcome.transient && attempt < retries;
-    if (!worthRetrying) fail(outcome.message);
-
-    process.stderr.write(`· ${outcome.message} — retrying (${attempt + 1}/${retries})\n`);
-    await sleep(1000);
+/** The one place a transport failure becomes something a person reads. */
+function reportFailure(error) {
+  if (error instanceof ExecutorError && error.status === 401) {
+    fail('unauthorized — REMOTE_CLAUDE_TOKEN does not match the worker');
   }
-}
-
-async function request(config, path, { method, body, raw }) {
-  let response;
-  try {
-    response = await fetch(`${config.url}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${config.token}`,
-        ...(body ? { 'content-type': 'application/json' } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-  } catch (error) {
-    return { ok: false, transient: true, message: `cannot reach ${config.url}: ${error.message}` };
-  }
-
-  if (response.status === 401) {
-    return { ok: false, message: 'unauthorized — REMOTE_CLAUDE_TOKEN does not match the worker' };
-  }
-  if (response.status === 404) return { ok: false, message: 'not found' };
-
-  const transient = response.status >= 500 || response.status === 429;
-
-  if (raw) {
-    const text = await response.text();
-    if (!response.ok) return { ok: false, transient, message: text || `HTTP ${response.status}` };
-    return { ok: true, value: text };
-  }
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    return { ok: false, transient, message: payload.error || `HTTP ${response.status}` };
-  }
-  return { ok: true, value: payload };
+  fail(error.message);
 }
 
 // -------------------------------------------------------------- commands
 
-async function cmdRun(config, args) {
+async function cmdRun(client, args) {
   const opts = parseArgs(args, {
     flags: ['no-follow', 'skip-checks', 'push', 'keep', 'json'],
     values: ['base'],
@@ -177,85 +152,87 @@ async function cmdRun(config, args) {
   const prompt = opts._.join(' ').trim();
   if (!prompt) fail('a prompt is required\n\n' + USAGE);
 
-  const created = await api(config, '/jobs', {
-    method: 'POST',
-    body: {
-      prompt,
-      baseBranch: opts.base,
-      skipChecks: opts['skip-checks'],
-      push: opts.push,
-      // Left to the executor to compose the title and body: it knows the prompt
-      // and, by the time it opens one, what its own checks reported.
-      ...(opts.pr ? { pullRequest: {} } : {}),
-      keepSandbox: opts.keep,
-    },
+  const created = await client.startJob({
+    prompt,
+    baseBranch: opts.base,
+    skipChecks: opts['skip-checks'],
+    push: opts.push,
+    // Left to the executor to compose the title and body: it knows the prompt
+    // and, by the time it opens one, what its own checks reported.
+    ...(opts.pr ? { pullRequest: {} } : {}),
+    keepSandbox: opts.keep,
   });
 
   if (opts.json) {
     process.stdout.write(JSON.stringify(created) + '\n');
     if (opts['no-follow']) return 0;
   } else {
-    log(`job ${created.jobId} → branch ${created.branch}`);
+    log(`job ${created.id} → branch ${created.branch}`);
     if (opts['no-follow']) {
-      log(`follow with:  remote-claude logs ${created.jobId} -f`);
+      log(`follow with:  remote-claude logs ${created.id} -f`);
       return 0;
     }
     log('');
   }
 
-  const final = await follow(config, created.jobId, !opts.json);
-  if (!opts.json) printSummary(final, created.jobId);
+  const final = await follow(client, created.id, !opts.json);
+  if (!opts.json) printSummary(final, created.id);
   else process.stdout.write(JSON.stringify(final) + '\n');
 
   return final.status === 'completed' ? 0 : 1;
 }
 
-async function follow(config, id, echo) {
-  let since = 0;
-  for (;;) {
-    const { logs, nextSince } = await api(config, `/jobs/${id}/logs?since=${since}`, {
-      retries: TRANSIENT_RETRIES,
-    });
-    since = nextSince ?? since;
-    if (echo) {
-      for (const entry of logs) {
-        const prefix = entry.stream === 'stderr' ? '! ' : entry.stream === 'system' ? '· ' : '  ';
-        process.stdout.write(prefix + entry.line + '\n');
-      }
-    }
-
-    const task = await api(config, `/jobs/${id}`, { retries: TRANSIENT_RETRIES });
-    if (TERMINAL.has(task.status)) {
-      // Drain anything written between the two calls.
-      const tail = await api(config, `/jobs/${id}/logs?since=${since}`, {
-        retries: TRANSIENT_RETRIES,
-      });
-      if (echo) for (const entry of tail.logs) process.stdout.write('  ' + entry.line + '\n');
-      return task;
-    }
-    await sleep(logs.length > 0 ? 400 : 1500);
-  }
+/**
+ * Print a job's log as it appears, and return the job once it is done.
+ *
+ * The loop itself belongs to the SDK: advancing the cursor only on a page that
+ * had lines, reading the tail once more after the status turns terminal, and
+ * surviving the 500 a deploy produces while the container carries on regardless.
+ * All of that was written here too, from the same bug reports.
+ */
+function follow(client, id, echo) {
+  return client.waitForJob(id, {
+    intervalMs: FOLLOW_INTERVAL_MS,
+    onLog: echo
+      ? (lines) => {
+          for (const entry of lines) {
+            const prefix =
+              entry.stream === 'stderr' ? '! ' : entry.stream === 'system' ? '· ' : '  ';
+            process.stdout.write(prefix + entry.line + '\n');
+          }
+        }
+      : undefined,
+    onTransientError: (error, consecutive) =>
+      process.stderr.write(`· ${error.message} — retrying (${consecutive})\n`),
+  });
 }
 
-async function cmdStatus(config, args) {
+async function cmdStatus(client, args) {
   const id = requireId(args);
-  const task = await api(config, `/jobs/${id}`);
+  const task = await client.getJob(id);
   if (args.includes('--json')) {
     process.stdout.write(JSON.stringify(task, null, 2) + '\n');
     return 0;
   }
   printSummary(task, id);
-  return TERMINAL.has(task.status) && task.status !== 'completed' ? 1 : 0;
+  return isTerminal(task.status) && task.status !== 'completed' ? 1 : 0;
 }
 
-async function cmdLogs(config, args) {
+async function cmdLogs(client, args) {
   const id = requireId(args);
   if (args.includes('-f') || args.includes('--follow')) {
-    await follow(config, id, true);
+    await follow(client, id, true);
     return 0;
   }
-  const text = await api(config, `/jobs/${id}/logs?format=text`, { raw: true });
-  process.stdout.write(text + '\n');
+  // Paged rather than asking the executor for one text blob: the same call the
+  // follow path uses, so there is one way logs are fetched and one place a
+  // change to that has to land.
+  for (let since = 0; ; ) {
+    const page = await client.getLogs(id, since);
+    if (page.logs.length === 0) break;
+    for (const entry of page.logs) process.stdout.write(entry.line + '\n');
+    since = page.nextSince;
+  }
   return 0;
 }
 
@@ -279,12 +256,20 @@ async function cmdLogs(config, args) {
  * reach this port can use the token without holding it, so the port must not
  * leave the machine.
  */
-async function cmdUi(config, args) {
+async function cmdUi(client, args) {
   const opts = parseArgs(args, { flags: ['no-open'], values: ['port'] });
   const port = Number.parseInt(opts.port ?? '7878', 10);
   if (!Number.isInteger(port) || port < 1 || port > 65535) fail(`invalid port: ${opts.port}`);
 
-  const page = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'dashboard.html'));
+  // The page carries no build step, so the one fact it shares with the client —
+  // which statuses are final — is substituted on the way out rather than
+  // maintained in a second place.
+  const page = Buffer.from(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'dashboard.html'), 'utf8').replace(
+      /\/\*__TERMINAL_STATUSES__\*\/[^;]+/,
+      JSON.stringify(Object.fromEntries(sdk.TERMINAL_STATUSES.map((status) => [status, 1])))
+    )
+  );
 
   const server = createServer((req, res) => {
     const path = (req.url ?? '/').split('#')[0];
@@ -306,7 +291,7 @@ async function cmdUi(config, args) {
       return;
     }
 
-    fetch(`${config.url}${path}`, { headers: { authorization: `Bearer ${config.token}` } })
+    fetch(`${client.config.url}${path}`, { headers: { authorization: `Bearer ${client.config.token}` } })
       .then(async (upstream) => {
         const body = Buffer.from(await upstream.arrayBuffer());
         res.writeHead(upstream.status, {
@@ -317,7 +302,7 @@ async function cmdUi(config, args) {
       })
       .catch((error) => {
         res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: `cannot reach ${config.url}: ${error.message}` }));
+        res.end(JSON.stringify({ error: `cannot reach ${client.config.url}: ${error.message}` }));
       });
   });
 
@@ -330,7 +315,7 @@ async function cmdUi(config, args) {
 
   const url = `http://127.0.0.1:${port}/`;
   log(`dashboard   ${url}`);
-  log(`upstream    ${config.url}`);
+  log(`upstream    ${client.config.url}`);
   log('');
   log('Ctrl-C to stop.');
 
@@ -343,9 +328,9 @@ async function cmdUi(config, args) {
   return 0;
 }
 
-async function cmdDiff(config, args) {
+async function cmdDiff(client, args) {
   const id = requireId(args);
-  const patch = await api(config, `/jobs/${id}/diff`, { raw: true });
+  const patch = (await client.getDiff(id)) ?? '';
   if (!patch.trim()) {
     log('(no changes)');
     return 1;
@@ -354,9 +339,9 @@ async function cmdDiff(config, args) {
   return 0;
 }
 
-async function cmdApply(config, args) {
+async function cmdApply(client, args) {
   const id = requireId(args);
-  const patch = await api(config, `/jobs/${id}/diff`, { raw: true });
+  const patch = (await client.getDiff(id)) ?? '';
   if (!patch.trim()) {
     log('(no changes to apply)');
     return 1;
@@ -378,15 +363,15 @@ function pipeToGit(argv, input) {
   });
 }
 
-async function cmdCancel(config, args) {
+async function cmdCancel(client, args) {
   const id = requireId(args);
-  const result = await api(config, `/jobs/${id}/cancel`, { method: 'POST' });
-  log(`job ${result.jobId}: ${result.status}`);
+  await client.cancelJob(id);
+  log(`job ${id}: cancelled`);
   return 0;
 }
 
-async function cmdList(config) {
-  const { tasks } = await api(config, '/jobs?limit=20');
+async function cmdList(client) {
+  const tasks = await client.listJobs(20);
   if (tasks.length === 0) {
     log('no jobs yet');
     return 0;
@@ -399,8 +384,8 @@ async function cmdList(config) {
   return 0;
 }
 
-async function cmdSandboxes(config) {
-  const ledger = await api(config, '/sandboxes');
+async function cmdSandboxes(client) {
+  const ledger = await client.listSandboxes();
   log(`outstanding ${ledger.outstanding.length}   reclaimed ${ledger.destroyed}   running ${ledger.running.length}`);
 
   if (ledger.outstanding.length === 0) {
@@ -421,17 +406,17 @@ async function cmdSandboxes(config) {
   return leaked.length > 0 ? 1 : 0;
 }
 
-async function cmdHealth(config, args) {
-  const health = await api(config, '/health');
-  log(`worker: ${health.ok ? 'ok' : 'unhealthy'}`);
+async function cmdHealth(client, args) {
+  const ok = await client.health();
+  log(`worker: ${ok ? 'ok' : 'unhealthy'}`);
   if (args.includes('--auth')) {
     log('probing Claude subscription auth (starts a container, ~30s) …');
-    const auth = await api(config, '/health/auth');
+    const auth = await client.checkAuth();
     log(`claude auth: ${auth.ok ? 'ok' : 'FAILED'} (mode=${auth.authMode}, scheme=${auth.authScheme})`);
     if (auth.output) log(`  ${auth.output}`);
     return auth.ok ? 0 : 1;
   }
-  return health.ok ? 0 : 1;
+  return ok ? 0 : 1;
 }
 
 // --------------------------------------------------------------- helpers
@@ -531,7 +516,14 @@ const COMMANDS = {
 };
 
 const config = loadConfig();
+// The endpoint travels with the client so the dashboard's proxy — the one thing
+// here that forwards requests rather than making them — can still reach it.
+const client = { ...createClient(config), config };
 // A bare prompt is shorthand for `run`.
 const [handler, args] = COMMANDS[first] ? [COMMANDS[first], rest] : [cmdRun, [first, ...rest]];
 
-process.exit((await handler(config, args)) ?? 0);
+try {
+  process.exit((await handler(client, args)) ?? 0);
+} catch (error) {
+  reportFailure(error);
+}
