@@ -1165,3 +1165,42 @@ describe('the repository directory contract', () => {
     expect(STATE_DIR).toBe('/workspace/.remote-claude');
   });
 });
+
+/**
+ * A job is not finished until what it leaves behind has been taken out.
+ *
+ * The status was saved as terminal and the workspace stored after it, so a client
+ * that waits for the job to finish and then answers it — the sequence a person
+ * actually follows — found nothing to continue. Live, one second apart:
+ *
+ *   $ remote-claude continue mspsy0ei-65df31ae "そのうち最初の1つについて…"
+ *   POST /jobs/…/continue failed (400): job … kept no workspace, so there is
+ *   nothing to continue.
+ *
+ * The record had a workspace by the time anybody looked. The upload takes seconds,
+ * so this is not a narrow race; it is the normal outcome of replying promptly.
+ */
+describe('finishing a job', () => {
+  test('does not report it done before its workspace is stored', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() })
+    );
+
+    const seenWhileStoring: (string | undefined)[] = [];
+    sandbox.onSnapshot = () => seenWhileStoring.push(h.jobs.load(job.id)?.status);
+
+    await h.service.tick();
+
+    // Whatever a client could observe at that moment, it was not "you may
+    // continue this now" while there was nothing yet to continue from.
+    expect(seenWhileStoring).toEqual(['running']);
+    const settled = h.jobs.load(job.id);
+    expect(settled?.status).toBe('completed');
+    expect(settled?.toRecord().workspace).toEqual({ provider: 'fake', id: 'snap-1' });
+  });
+});

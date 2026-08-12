@@ -427,8 +427,12 @@ export class FakeSandbox implements SandboxSession {
   /** Set to make storing fail, the way missing R2 credentials do. */
   snapshotError: string | null = null;
 
+  /** Called as the snapshot is taken — for asserting what was true by then. */
+  onSnapshot: (() => void) | null = null;
+
   async snapshot(options: SnapshotOptions): Promise<SnapshotRef | null> {
     this.snapshotted.push(options);
+    this.onSnapshot?.();
     if (this.snapshotError) throw new Error(this.snapshotError);
     return this.snapshotRef;
   }

@@ -15,6 +15,7 @@ import type {
   JobSummary,
   LogLine,
   PullRequestRequest,
+  WorkspaceRef,
 } from '../domain/job/record';
 import { composePullRequest } from '../domain/job/pull-request';
 import { resolveRepository } from '../domain/job/repository';
@@ -941,16 +942,26 @@ export class JobService {
 
     const job = jobs.load(jobId);
     const reason = error ? redact(error) : undefined;
-    if (job?.settle(status, clock.now(), { error: reason, result })) {
+    // Settled in memory first, so `finishedAt` is when the work finished rather
+    // than when the last upload did.
+    const settled = job?.settle(status, clock.now(), { error: reason, result }) ?? false;
+
+    // Before the sandbox goes: whatever this job leaves behind has to be taken
+    // out of it first — and before the record says the job is done, because a job
+    // reported finished is one a client may immediately try to continue. Saving
+    // the terminal status first meant the sequence a person actually follows —
+    // watch it finish, then answer it — was refused for having no workspace, for
+    // the seconds the upload takes. Which is most of the time, not rarely.
+    const workspace = settled ? await this.carryWorkspace(jobId) : null;
+    if (job && workspace) job.recordWorkspace(workspace);
+
+    if (settled && job) {
       jobs.save(job);
       this.log(jobId, 'system', `job ${status}${reason ? `: ${reason}` : ''}`);
     }
 
     logs.flush(jobId);
     running.end(jobId);
-    // Before the sandbox goes: whatever this job leaves behind has to be taken
-    // out of it first.
-    await this.carryWorkspace(jobId);
     if (!job?.options.keepSandbox) await this.teardown(jobId);
     await this.drain();
   }
@@ -966,10 +977,10 @@ export class JobService {
    * `.gitignore` is respected, so what travels is the working tree and the
    * conversation beside it — not a reinstalled `node_modules`.
    */
-  private async carryWorkspace(jobId: string): Promise<void> {
+  private async carryWorkspace(jobId: string): Promise<WorkspaceRef | null> {
     const { jobs, sandboxes, policy } = this.deps;
     const job = jobs.load(jobId);
-    if (!job) return;
+    if (!job) return null;
 
     try {
       const sandbox = await sandboxes.create(sandboxIdForJob(jobId));
@@ -985,13 +996,11 @@ export class JobService {
       // Null means no store is configured for this deployment. That is a
       // deployment's choice, not a failure, and it is already visible as the
       // absence of a workspace on the record.
-      if (!workspace) return;
-
-      const current = jobs.load(jobId);
-      if (current) {
-        current.recordWorkspace(workspace);
-        jobs.save(current);
-      }
+      //
+      // Returned rather than saved here: the caller is mid-settle and holds the
+      // aggregate this belongs on. Writing a second copy from underneath it is
+      // how one of the two ends up describing a job that no longer exists.
+      return workspace ?? null;
     } catch (error) {
       this.log(
         jobId,
@@ -999,6 +1008,7 @@ export class JobService {
         `the workspace could not be kept: ${errorMessage(error)}`,
       );
       this.deps.logs.flush(jobId);
+      return null;
     }
   }
 
