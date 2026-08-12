@@ -47,6 +47,13 @@ jobs:
       - name: Test
         run: npm test
 
+      # The properties that only exist inside workerd. Separate because they need
+      # a runtime rather than fakes — and load-bearing: removing the name-based
+      # error classification fails three of them, which is how the defect they
+      # were written for reached production in the first place.
+      - name: Test inside workerd
+        run: npm run test:workers
+
       - name: Build SDK
         run: npm run sdk:build
 

@@ -11,6 +11,7 @@
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:workers": "vitest run --config vitest.workers.config.ts",
     "test:watch": "vitest",
     "sdk:build": "npm --prefix sdk run build",
     "sdk:typecheck": "npm --prefix sdk run typecheck",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@cloudflare/sandbox": "^0.12.4",
+    "@cloudflare/vitest-pool-workers": "^0.21.1",
     "@types/node": "^24.10.1",
     "drizzle-kit": "^0.31.10",
     "typescript": "^5.9.3",
