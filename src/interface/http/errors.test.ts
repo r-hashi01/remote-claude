@@ -45,3 +45,43 @@ describe('toErrorResponse', () => {
     await expect(answer.json()).resolves.toEqual({ error: 'clone failed for [redacted]' });
   });
 });
+
+/**
+ * What a Durable Object's throw looks like by the time it gets here.
+ *
+ * The classification worked in every test and none of them crossed the boundary
+ * the real request crosses: `createJob` runs inside the JobManager object, and
+ * RPC rebuilds the error from its name, message and stack — not from its class.
+ * So `instanceof Refusal` was false in production and every refusal raised
+ * inside the object answered 500. Live, naming an unreachable repository:
+ *
+ *   POST /jobs failed (500): this executor's GitHub App installation cannot
+ *   reach no-such-owner/no-such-repo. …
+ *
+ * 500 also means "worth retrying" to every client that follows the SDK's rule,
+ * so a permanent refusal was something consumers would retry forever.
+ */
+describe('an error that has crossed a Durable Object boundary', () => {
+  /** As RPC delivers it: the right name, the wrong prototype. */
+  function acrossRpc(name: string, message: string): Error {
+    const error = new Error(message);
+    error.name = name;
+    return error;
+  }
+
+  test('a refusal is still the caller\'s, not the server\'s', () => {
+    const answer = toErrorResponse(acrossRpc('Refusal', 'pushing is disabled on it'), plain);
+    expect(answer.status).toBe(400);
+  });
+
+  test('a missing thing is still missing', () => {
+    const answer = toErrorResponse(acrossRpc('NotFound', 'job nope is not one this executor knows'), plain);
+    expect(answer.status).toBe(404);
+  });
+
+  // The names are the contract, so nothing else may borrow them by accident.
+  test('anything else is still the server\'s problem', () => {
+    expect(toErrorResponse(acrossRpc('TypeError', 'x is not a function'), plain).status).toBe(500);
+    expect(toErrorResponse(acrossRpc('Error', 'too many SQL variables'), plain).status).toBe(500);
+  });
+});

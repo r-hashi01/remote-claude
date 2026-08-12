@@ -56,6 +56,7 @@ remote-claude — run Claude Code on Cloudflare, not on your Mac
   remote-claude health [--auth]         check the worker (and Claude auth)
 
 Options for run:
+  --repo <url>      repository to work on (default: worker's REPO_URL)
   --base <branch>   base branch (default: worker's DEFAULT_BASE_BRANCH)
   --no-follow       return immediately after printing the task id
   --skip-checks     skip lint/test/build
@@ -147,13 +148,18 @@ function reportFailure(error) {
 async function cmdRun(client, args) {
   const opts = parseArgs(args, {
     flags: ['no-follow', 'skip-checks', 'push', 'keep', 'json'],
-    values: ['base'],
+    values: ['base', 'repo'],
   });
   const prompt = opts._.join(' ').trim();
   if (!prompt) fail('a prompt is required\n\n' + USAGE);
 
   const created = await client.startJob({
     prompt,
+    // Accepted by the API and offered by the SDK, and missing here — so a job
+    // aimed at anything but the deployment's own REPO_URL was silently run
+    // against that instead. Which repositories may be named is the GitHub App
+    // installation's answer, not this flag's (ADR 0010).
+    repo: opts.repo,
     baseBranch: opts.base,
     skipChecks: opts['skip-checks'],
     push: opts.push,

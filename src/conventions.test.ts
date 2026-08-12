@@ -20,6 +20,10 @@ const sources = globSync('src/**/*.ts', { cwd: process.cwd() }).filter(
 
 const read = (path: string) => readFileSync(path, 'utf8');
 
+/** For checks about what the code does, rather than what it says about itself. */
+const withoutComments = (source: string) =>
+  source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
 describe('an error says what kind of answer it is', () => {
   /**
    * Failures where 500 — or a job's own error field — is the honest answer.
@@ -151,4 +155,37 @@ describe('a sandbox outlasts the job it is holding', () => {
       expect(toMs(configured as string)).toBeGreaterThan(Number(budget?.[1]));
     }
   );
+});
+
+/**
+ * The classification has to survive the boundary the request crosses.
+ *
+ * `Refusal` and `NotFound` were checked with `instanceof` only, and every test
+ * that exercised them called the service directly. The real request does not:
+ * `createJob` runs inside a Durable Object, and RPC rebuilds an error from its
+ * name rather than its class. So the rule held everywhere it was tested and
+ * nowhere it mattered — every refusal raised inside the object answered 500,
+ * which also told every client that a permanent refusal was worth retrying.
+ *
+ * The name is the contract, so it may not be spelled by hand in the layer that
+ * reads it, and it may not be taken from the class identifier a build may rename.
+ */
+describe('a refusal survives being thrown across a Durable Object', () => {
+  test('the HTTP layer classifies by name as well as by class', () => {
+    const source = read('src/interface/http/errors.ts');
+    expect(source).toMatch(/error instanceof Error \? error\.name/);
+    expect(source).toMatch(/=== NOT_FOUND/);
+    expect(source).toMatch(/=== REFUSAL/);
+  });
+
+  test('the names come from one place, and not from the class identifier', () => {
+    expect(read('src/domain/job/errors.ts')).toMatch(/this\.name = (REFUSAL|NOT_FOUND);/);
+    for (const path of ['src/domain/job/errors.ts', 'src/interface/http/errors.ts']) {
+      // Code only: these files explain the trap in prose, and a check that reads
+      // the explanation as an instance of it fails for saying the right thing.
+      expect(withoutComments(read(path)), `${path} reads a name a build may rename`).not.toMatch(
+        /(Refusal|NotFound)\.name/
+      );
+    }
+  });
 });

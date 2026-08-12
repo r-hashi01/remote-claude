@@ -1,4 +1,15 @@
 /**
+ * The names these errors travel under.
+ *
+ * A Durable Object's throw reaches the HTTP layer as a plain Error carrying its
+ * name, so the name is part of the contract between them — and a contract cannot
+ * be `Refusal.name`, which is a class identifier a build is free to rename while
+ * the literal assigned in the constructor stays as written.
+ */
+export const REFUSAL = 'Refusal';
+export const NOT_FOUND = 'NotFound';
+
+/**
  * A refusal: the request, or this deployment's configuration, not a fault.
  *
  * Exists because the HTTP layer used to guess. It matched the message against a
@@ -13,7 +24,7 @@
 export class Refusal extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'Refusal';
+    this.name = REFUSAL;
   }
 }
 
@@ -28,6 +39,6 @@ export class Refusal extends Error {
 export class NotFound extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'NotFound';
+    this.name = NOT_FOUND;
   }
 }

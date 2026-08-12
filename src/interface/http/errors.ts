@@ -1,4 +1,4 @@
-import { NotFound, Refusal } from '../../domain/job/errors';
+import { NOT_FOUND, NotFound, REFUSAL, Refusal } from '../../domain/job/errors';
 import type { Redact } from '../../application/ports';
 
 /**
@@ -16,6 +16,29 @@ export function toErrorResponse(error: unknown, redact: Redact): Response {
   // matching against a list of words, so every new refusal had to remember to
   // contain one of them — and the ones that forgot reported a caller's mistake
   // as a server error.
-  const status = error instanceof NotFound ? 404 : error instanceof Refusal ? 400 : 500;
+  const status = statusFor(error);
   return Response.json({ error: message }, { status });
+}
+
+/**
+ * Which failure this is.
+ *
+ * `instanceof` is the answer while the throw and the catch are in one place. The
+ * request's throws are not: `createJob` runs inside the JobManager Durable
+ * Object, and RPC rebuilds an error from its name, message and stack rather than
+ * its class — so every refusal raised inside the object arrived as a plain Error
+ * and was answered 500. Which also tells every client following the SDK's rule
+ * that the failure is worth retrying, so a permanent refusal became something
+ * consumers would retry forever.
+ *
+ * The tests all passed because they all called the service directly. The name is
+ * checked as well precisely because it is what survives the crossing.
+ */
+function statusFor(error: unknown): number {
+  if (error instanceof NotFound) return 404;
+  if (error instanceof Refusal) return 400;
+  const name = error instanceof Error ? error.name : '';
+  if (name === NOT_FOUND) return 404;
+  if (name === REFUSAL) return 400;
+  return 500;
 }
