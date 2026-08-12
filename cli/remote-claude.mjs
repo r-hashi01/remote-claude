@@ -45,6 +45,8 @@ remote-claude — run Claude Code on Cloudflare, not on your Mac
 
   remote-claude "<prompt>"              start a job and follow it
   remote-claude run "<prompt>" [opts]   same, explicit form
+  remote-claude continue <job-id> "<reply>"
+                                        answer a finished job and carry on
   remote-claude status <job-id>        show a job's status and summary
   remote-claude logs <job-id> [-f]     print logs (-f/--follow to tail)
   remote-claude diff <job-id>          print the unified diff
@@ -211,6 +213,54 @@ function follow(client, id, echo) {
     onTransientError: (error, consecutive) =>
       process.stderr.write(`· ${error.message} — retrying (${consecutive})\n`),
   });
+}
+
+/**
+ * Answer a job and let it carry on from where it stopped.
+ *
+ * The case a one-shot job cannot handle: the agent stopped to ask something. The
+ * turn restores that job's workspace and resumes its conversation (ADR 0011), so
+ * a reply of "A で行こう" lands where the question was asked instead of at the
+ * start of a fresh job that has never heard of A.
+ *
+ * Offered by the API and by the SDK, and missing here — so the one client in this
+ * repository could start jobs and never answer them.
+ */
+async function cmdContinue(client, args) {
+  const opts = parseArgs(args, {
+    flags: ['no-follow', 'skip-checks', 'push', 'pr', 'keep', 'json'],
+    values: [],
+  });
+  const [previousId, ...rest] = opts._;
+  if (!previousId) fail('a job id is required: remote-claude continue <job-id> "<reply>"');
+  const prompt = rest.join(' ').trim();
+  if (!prompt) fail('a reply is required — this is a turn in a conversation');
+
+  const created = await client.continueJob(previousId, {
+    prompt,
+    skipChecks: opts['skip-checks'],
+    push: opts.push,
+    ...(opts.pr ? { pullRequest: {} } : {}),
+    keepSandbox: opts.keep,
+  });
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(created) + '\n');
+    if (opts['no-follow']) return 0;
+  } else {
+    log(`job ${created.id} continues ${previousId} → branch ${created.branch}`);
+    if (opts['no-follow']) {
+      log(`follow with:  remote-claude logs ${created.id} -f`);
+      return 0;
+    }
+    log('');
+  }
+
+  const final = await follow(client, created.id, !opts.json);
+  if (!opts.json) printSummary(final, created.id);
+  else process.stdout.write(JSON.stringify(final) + '\n');
+
+  return final.status === 'completed' ? 0 : 1;
 }
 
 async function cmdStatus(client, args) {
@@ -510,6 +560,7 @@ if (!first || first === '--help' || first === '-h' || first === 'help') {
 
 const COMMANDS = {
   run: cmdRun,
+  continue: cmdContinue,
   status: cmdStatus,
   logs: cmdLogs,
   ui: cmdUi,
