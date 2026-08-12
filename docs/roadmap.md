@@ -387,10 +387,20 @@ import しているため `sdk/dist` は**バンドラ無しでそのまま読�
 テスト36件（auth / errors / router）。`jobs` と `tasks` の両方で返すこと、`id` と `jobId` の両方、
 diff が無いときは 404（空の patch ではない）といった**利用者が依存している形**も固定した。
 
-### RC-9. SDK の publish
+### ~~RC-9. SDK の publish~~ → 対応済み
 
-`sdk/` は package として成立していて CI が build まで通すが、**まだ npm に publish していない**。
-それまで利用者は git 経由で参照するか vendor する必要がある（ADR 0009）。
+`@r-hashi01/remote-claude-client` を npm に公開した（0.1.0 → **0.2.0**）。
+0.2.0 で `continueJob` と `continues` が入る（ADR 0011 の追加ターン）。
+spindle は 0.2.0 に上げ済み。
+
+publish は 2FA が要るので人手。詰まった点を1つ残す:
+**未認証の publish は 404 で返る**（既存パッケージの存在を漏らさないため）。
+`npm error 404 ... could not be found or you do not have permission` は
+権限の話に見えるが、まず `npm whoami` を見ること — 401 ならログインが切れているだけ。
+
+なおこのリポジトリ自身は publish 版ではなく `file:./sdk` を参照し続ける。
+CLI が最初の利用者である価値は**作業ツリーを叩くこと**にあり、
+壊れているなら publish の後ではなく前に分かってほしい。
 
 ---
 
