@@ -1,0 +1,39 @@
+{
+  // The deployment's shape, reduced to what a test needs to cross the boundary
+  // the real request crosses.
+  //
+  // Separate from wrangler.jsonc on purpose, for two reasons.
+  //
+  // That one declares a container image, and a test that had to build a container
+  // to check an HTTP status would not get run. What is under test here is the
+  // Durable Object hop, not the sandbox.
+  //
+  // And it lives in this directory so that `.dev.vars` beside *it* is what gets
+  // loaded — which is nothing. Pointed at the root config, these tests ran with
+  // the real deployment's secrets: the actual bearer token, the Claude OAuth
+  // token, the GitHub App private key, the R2 keys. A test suite holding
+  // production credentials is one accident away from spending or pushing with
+  // them.
+  "name": "remote-claude-test",
+  "main": "../src/index.ts",
+  "compatibility_date": "2026-04-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "class_name": "JobManager", "name": "JOBS" },
+      // Bound but never exercised: the provider is constructed when the object
+      // wakes, and these tests stop before anything is launched into a sandbox.
+      { "class_name": "Sandbox", "name": "Sandbox" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["JobManager", "Sandbox"] }],
+  "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "test-artifacts" }],
+  "vars": {
+    "REMOTE_CLAUDE_TOKEN": "test-token",
+    "REPO_URL": "https://github.com/r-hashi01/spindle.git",
+    "DEFAULT_BASE_BRANCH": "main",
+    "MAX_CONCURRENCY": "1",
+    "ALLOW_PUSH": "false",
+    "ALLOW_CUSTOM_REPO": "false"
+  }
+}
