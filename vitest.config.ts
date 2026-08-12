@@ -21,6 +21,12 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['src/**/*.test.ts', 'sdk/src/**/*.test.ts'],
+    // The workerd suite matches the pattern above and cannot run here: it imports
+    // `cloudflare:test`, which only exists inside the runtime. Named rather than
+    // left to a naming convention, because the failure it produces is a file that
+    // cannot load — and a summary line counting only tests reports every test
+    // passing while a whole file is on the floor. Which is how it reached CI.
+    exclude: ['**/node_modules/**', '**/*.boundary.test.ts'],
     environment: 'node',
   },
 });
