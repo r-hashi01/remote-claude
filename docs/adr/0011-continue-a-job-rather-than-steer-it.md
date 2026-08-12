@@ -132,3 +132,30 @@ container のネットワークは deny-by-default（ADR 0002 の姿勢）で、
 3回目の教訓も書いておく: **`wrangler secret put` は空入力でも成功と表示する。**
 そして SDK 側は `!value` で判定するので、**空の secret は未設定と完全に同じに見える。**
 今日3度目の「値が存在するが効かない」だった（`ALLOW_PUSH`、`WORKSPACE_CACHE`、そして空 secret）。
+
+## Addendum — 2026-08-12: 完了以外の終わり方からの継続
+
+この ADR は完了したジョブの追加ターンとして書かれ、実際に検証されたのもそれだけだった。
+終端は3種類あるので、残り2つを確かめた。
+
+| 元のジョブ | session | workspace | continue |
+|---|---|---|---|
+| 完了 | あり | あり | **通る** — 「そのうち最初の1つ」で前ターンの `errors.ts` を指した |
+| agent 実行中にキャンセル | **あり** | **あり** | **通る** — 中断した調査の内容を踏まえて答えた |
+| agent より前に失敗（install が落ちた） | なし | あり | **拒否（400）** |
+
+3つ目は設計どおりで、文言もそう言っている:
+
+> job … never started a conversation — it stopped before the agent ran —
+> so there is nothing to resume. Submit a new job instead.
+
+会話が無く、木も変更前のままなので、新規ジョブと等価。**workspace は残っている**が、
+残っているものだけでは継続の意味を満たさない、という区別である。
+
+2つ目が継続のいちばん有用な形だと分かった。キャンセルする理由はたいてい
+「そのままでは困るので軌道修正したい」であり、そのとき会話は既に存在する。
+`remote-claude cancel` の直後に `remote-claude continue` が使えるということ。
+
+なおこの検証中、3つの拒否がすべて 400/404 で返った。
+ADR 0006 追記と RC-16 の修正（DO 境界を越えると `Refusal` がクラスを失う）が
+効いていることの実測でもある。
