@@ -60,12 +60,21 @@ remote-claude — run Claude Code on Cloudflare, not on your Mac
 Options for run:
   --repo <url>      repository to work on (default: worker's REPO_URL)
   --base <branch>   base branch (default: worker's DEFAULT_BASE_BRANCH)
+  --branch <name>   work on this branch instead of a generated one
+  --install <cmd>   install command for this job (see below)
+  --lint <cmd>      lint command for this job
+  --test <cmd>      test command for this job
+  --build <cmd>     build command for this job
   --no-follow       return immediately after printing the task id
   --skip-checks     skip lint/test/build
   --push            push the branch (requires ALLOW_PUSH=true on the worker)
   --pr              push and open a pull request (implies --push)
   --keep            leave the sandbox alive for inspection
   --json            machine-readable output
+
+The four command options matter most with --repo: a deployment's commands were
+written for the repository it is configured with, and install runs even when
+--skip-checks is set. Pass an empty string to skip one: --install ''.
 
 Configuration (first match wins):
   env  REMOTE_CLAUDE_URL / REMOTE_CLAUDE_TOKEN
@@ -147,10 +156,53 @@ function reportFailure(error) {
 
 // -------------------------------------------------------------- commands
 
+/**
+ * Every field of the SDK's `StartJob`, and how this CLI spells it.
+ *
+ * Stated rather than implied, because three capabilities — naming a repository,
+ * continuing a job, supplying the commands — existed in the API and the SDK and
+ * not here, and nothing said so. A test in src/conventions.test.ts fails when the
+ * SDK grows a field this map does not mention.
+ */
+const RUN_OPTIONS = {
+  prompt: 'the positional argument',
+  repo: '--repo',
+  baseBranch: '--base',
+  branch: '--branch',
+  commands: '--install / --lint / --test / --build',
+  skipChecks: '--skip-checks',
+  keepSandbox: '--keep',
+  push: '--push',
+  pullRequest: '--pr',
+};
+
+/** The same for a follow-up turn, which inherits the repository and branch. */
+const CONTINUE_OPTIONS = {
+  prompt: 'the positional argument',
+  commands: '--install / --lint / --test / --build',
+  skipChecks: '--skip-checks',
+  keepSandbox: '--keep',
+  push: '--push',
+  pullRequest: '--pr',
+};
+
+/**
+ * The four command overrides, as the API wants them.
+ *
+ * Absent keys inherit the deployment's, so an option nobody passed must not
+ * appear at all — `{ install: undefined }` and `{}` do not mean the same thing to
+ * a caller who wants the deployment's install command.
+ */
+function commandsFrom(opts) {
+  const given = ['install', 'lint', 'test', 'build'].filter((name) => opts[name] !== undefined);
+  if (given.length === 0) return undefined;
+  return Object.fromEntries(given.map((name) => [name, opts[name]]));
+}
+
 async function cmdRun(client, args) {
   const opts = parseArgs(args, {
-    flags: ['no-follow', 'skip-checks', 'push', 'keep', 'json'],
-    values: ['base', 'repo'],
+    flags: ['no-follow', 'skip-checks', 'push', 'pr', 'keep', 'json'],
+    values: ['base', 'repo', 'branch', 'install', 'lint', 'test', 'build'],
   });
   const prompt = opts._.join(' ').trim();
   if (!prompt) fail('a prompt is required\n\n' + USAGE);
@@ -163,6 +215,8 @@ async function cmdRun(client, args) {
     // installation's answer, not this flag's (ADR 0010).
     repo: opts.repo,
     baseBranch: opts.base,
+    branch: opts.branch,
+    commands: commandsFrom(opts),
     skipChecks: opts['skip-checks'],
     push: opts.push,
     // Left to the executor to compose the title and body: it knows the prompt
@@ -229,7 +283,7 @@ function follow(client, id, echo) {
 async function cmdContinue(client, args) {
   const opts = parseArgs(args, {
     flags: ['no-follow', 'skip-checks', 'push', 'pr', 'keep', 'json'],
-    values: [],
+    values: ['install', 'lint', 'test', 'build'],
   });
   const [previousId, ...rest] = opts._;
   if (!previousId) fail('a job id is required: remote-claude continue <job-id> "<reply>"');
@@ -238,6 +292,7 @@ async function cmdContinue(client, args) {
 
   const created = await client.continueJob(previousId, {
     prompt,
+    commands: commandsFrom(opts),
     skipChecks: opts['skip-checks'],
     push: opts.push,
     ...(opts.pr ? { pullRequest: {} } : {}),

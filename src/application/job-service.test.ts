@@ -1204,3 +1204,54 @@ describe('finishing a job', () => {
     expect(settled?.toRecord().workspace).toEqual({ provider: 'fake', id: 'snap-1' });
   });
 });
+
+/**
+ * The pull request has to exist by the time the job says it is finished.
+ *
+ * Same shape as the workspace: it was opened after the terminal status was saved,
+ * so a client that waits for the job to finish and prints its summary saw no
+ * pull request and told the reader to apply the diff by hand. The comment on that
+ * line calls it "the one line that lets somebody without this CLI see the work" —
+ * and it was missing exactly when there was work to see. Job msr38l4i opened
+ * pull request #43 and reported `apply locally:` instead.
+ *
+ * Opening it before settling does not weaken the rule that a pull request must
+ * never fail a finished job. That rule is about failure, not about order.
+ */
+describe('a job that asked for a pull request', () => {
+  test('has one by the time it reports finished', async () => {
+    const github = new AllowAllGitHub();
+    const h = harness({ policy: policy({ allowPush: true }), github });
+    const job = await h.service.createJob({ prompt: 'x', push: true, pullRequest: {} });
+    await h.service.tick();
+
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() })
+    );
+    sandbox.files.set(
+      `${STATE_DIR}/result.json`,
+      JSON.stringify({
+        changed: true,
+        pushed: true,
+        branch: job.branch,
+        claudeOutput: '',
+        gitStatus: '',
+        diffStat: ' a | 1 +',
+        diffBytes: 10,
+        steps: [],
+      })
+    );
+
+    const seenWhileOpening: (string | undefined)[] = [];
+    github.onOpen = () => seenWhileOpening.push(h.jobs.load(job.id)?.status);
+
+    await h.service.tick();
+
+    expect(seenWhileOpening).toEqual(['running']);
+    const settled = h.jobs.load(job.id);
+    expect(settled?.status).toBe('completed');
+    expect(settled?.toRecord().pullRequestUrl).toBe('https://github.com/o/r/pull/1');
+  });
+});
