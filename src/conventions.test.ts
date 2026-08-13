@@ -170,6 +170,29 @@ describe('a sandbox outlasts the job it is holding', () => {
  * The name is the contract, so it may not be spelled by hand in the layer that
  * reads it, and it may not be taken from the class identifier a build may rename.
  */
+/**
+ * `TERMINAL_STATUSES` is declared twice: once in `src/domain/job/status.ts` for
+ * the executor, and again in `sdk/src/domain/job.ts` for the SDK. They cannot
+ * import from one another — the SDK has to install outside this repository,
+ * without this repository's dependencies — so nothing but this check keeps
+ * them in step. A status added to one list and not the other is a job the
+ * executor considers finished that an SDK consumer, checking its own copy,
+ * would still be waiting on.
+ */
+describe('the executor and the SDK agree on which statuses are terminal', () => {
+  const extractTerminalStatuses = (path: string): string[] => {
+    const match = /TERMINAL_STATUSES = \[([^\]]*)\]/.exec(read(path));
+    expect(match, `no TERMINAL_STATUSES array found in ${path}`).not.toBeNull();
+    return [...match![1]!.matchAll(/'([a-z]+)'/g)].map((m) => m[1]!).sort();
+  };
+
+  test('src/domain/job/status.ts and sdk/src/domain/job.ts list the same statuses', () => {
+    expect(extractTerminalStatuses('src/domain/job/status.ts')).toEqual(
+      extractTerminalStatuses('sdk/src/domain/job.ts')
+    );
+  });
+});
+
 describe('a refusal survives being thrown across a Durable Object', () => {
   test('the HTTP layer classifies by name as well as by class', () => {
     const source = read('src/interface/http/errors.ts');
