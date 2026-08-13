@@ -341,3 +341,75 @@ describe('the documentation only offers flags the command has', () => {
     expect(offered.filter((flag) => !run.has(flag))).toEqual([]);
   });
 });
+
+/**
+ * A setting that is read and then never consulted does nothing, quietly.
+ *
+ * `ALLOW_PUSH` was parsed into the policy and asked about nowhere, so a
+ * deployment that forbade pushing handed out pushes — and the guard above, which
+ * only asks whether an environment variable is *read*, was satisfied the whole
+ * time. Being read is one step; being consulted is the step that has an effect.
+ *
+ * Every field is consulted today. This exists because the one that was not took a
+ * live incident to notice.
+ */
+describe('every policy field is consulted by somebody', () => {
+  const consumers = globSync('src/**/*.ts', { cwd: process.cwd() }).filter(
+    (path) =>
+      !path.includes('.test.') &&
+      !path.endsWith('testing.ts') &&
+      // Where the policy is built and declared, rather than acted on.
+      !path.endsWith('infrastructure/config.ts') &&
+      !path.endsWith('application/ports/index.ts')
+  );
+
+  test('nothing in ExecutorPolicy is decoration', () => {
+    const policy = /export interface ExecutorPolicy \{([\s\S]*?)\n\}/.exec(
+      read('src/application/ports/index.ts')
+    );
+    expect(policy, 'no ExecutorPolicy').not.toBeNull();
+
+    const fields = [
+      ...withoutComments(policy?.[1] ?? '').matchAll(/^\s{2}([a-zA-Z]+)\??:/gm),
+    ].map((match) => match[1] as string);
+    expect(fields.length, 'no fields found').toBeGreaterThan(5);
+
+    const sources = consumers.map(read).join('\n');
+    expect(fields.filter((field) => !sources.includes(`policy.${field}`))).toEqual([]);
+  });
+});
+
+/**
+ * The runner's input is a file, and files have no types.
+ *
+ * `job.json` is the whole contract between the Worker and the process that does
+ * the work, and the two sides are a TypeScript module and a plain-JS file that
+ * never import from one another. A field the runner reads and nobody writes is
+ * `undefined` at the point it matters — for a timeout, that means no timeout,
+ * which looks like nothing at all until a step hangs for the length of the job.
+ */
+describe('the runner and the Worker agree on job.json', () => {
+  test('every field the runner reads is one the Worker writes', () => {
+    const runner = read('container/runner.mjs');
+    const written = read('src/application/job-service.ts');
+
+    const read_ = [...withoutComments(runner).matchAll(/\bjob\.([a-zA-Z]+)/g)]
+      .map((match) => match[1] as string)
+      // The state file's own name, not a field of the job.
+      .filter((field) => field !== 'json');
+    expect(read_.length, 'the runner reads nothing?').toBeGreaterThan(4);
+
+    // The Worker writes the file as one object literal; a key there is the field.
+    const payload = /`\$\{STATE_DIR\}\/job\.json`,\s*JSON\.stringify\(\{([\s\S]*?)\n *\}\)/.exec(
+      written
+    );
+    expect(payload, 'no job.json payload found').not.toBeNull();
+    const keys = new Set(
+      [...withoutComments(payload?.[1] ?? '').matchAll(/^\s+([a-zA-Z]+)[:,]/gm)].map(
+        (match) => match[1] as string
+      )
+    );
+
+    expect([...new Set(read_)].filter((field) => !keys.has(field))).toEqual([]);
+  });
+});
