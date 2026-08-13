@@ -65,10 +65,14 @@ export class InMemoryJobStore implements JobStore {
     return raw ? Job.fromRecord(JSON.parse(raw)) : null;
   }
 
+  /** Called on every write — for asserting what a record held at that moment. */
+  onSave: ((job: Job) => void) | null = null;
+
   save(job: Job): void {
     // Serialised on the way in, exactly as the real store does, so a test can
     // never accidentally share a mutable object with the code under test.
     this.records.set(job.id, JSON.stringify(job.toRecord()));
+    this.onSave?.(job);
   }
 
   listRecent(limit: number): Job[] {
