@@ -158,19 +158,6 @@ describe('a sandbox outlasts the job it is holding', () => {
 });
 
 /**
- * The classification has to survive the boundary the request crosses.
- *
- * `Refusal` and `NotFound` were checked with `instanceof` only, and every test
- * that exercised them called the service directly. The real request does not:
- * `createJob` runs inside a Durable Object, and RPC rebuilds an error from its
- * name rather than its class. So the rule held everywhere it was tested and
- * nowhere it mattered — every refusal raised inside the object answered 500,
- * which also told every client that a permanent refusal was worth retrying.
- *
- * The name is the contract, so it may not be spelled by hand in the layer that
- * reads it, and it may not be taken from the class identifier a build may rename.
- */
-/**
  * `TERMINAL_STATUSES` is declared twice: once in `src/domain/job/status.ts` for
  * the executor, and again in `sdk/src/domain/job.ts` for the SDK. They cannot
  * import from one another — the SDK has to install outside this repository,
@@ -193,6 +180,19 @@ describe('the executor and the SDK agree on which statuses are terminal', () => 
   });
 });
 
+/**
+ * The classification has to survive the boundary the request crosses.
+ *
+ * `Refusal` and `NotFound` were checked with `instanceof` only, and every test
+ * that exercised them called the service directly. The real request does not:
+ * `createJob` runs inside a Durable Object, and RPC rebuilds an error from its
+ * name rather than its class. So the rule held everywhere it was tested and
+ * nowhere it mattered — every refusal raised inside the object answered 500,
+ * which also told every client that a permanent refusal was worth retrying.
+ *
+ * The name is the contract, so it may not be spelled by hand in the layer that
+ * reads it, and it may not be taken from the class identifier a build may rename.
+ */
 describe('a refusal survives being thrown across a Durable Object', () => {
   test('the HTTP layer classifies by name as well as by class', () => {
     const source = read('src/interface/http/errors.ts');
