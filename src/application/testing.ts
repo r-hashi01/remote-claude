@@ -256,7 +256,11 @@ export class AllowAllGitHub implements GitHubAccess {
   async assertCanOpenPullRequests(repoUrl: string): Promise<void> {
     this.checkedForPullRequests.push(repoUrl);
   }
+  /** Called as the pull request is opened — for asserting what was true by then. */
+  onOpen: (() => void) | null = null;
+
   async openPullRequest(input: OpenPullRequest): Promise<string> {
+    this.onOpen?.();
     if (this.openError) throw new Error(this.openError);
     this.opened.push(input);
     return `https://github.com/o/r/pull/${this.opened.length}`;
