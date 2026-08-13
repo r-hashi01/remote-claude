@@ -8,6 +8,7 @@ import {
   SqliteLogStore,
 } from './sqlite-stores';
 import { R2ArtifactStore } from './r2-artifact-store';
+import { describeJobStore, describeLogStore } from '../../application/store-contract';
 
 /**
  * The stores, against the storage they were written for.
@@ -277,3 +278,13 @@ describe('the artifact store', () => {
     expect(await store.getPatch('never-ran')).toBeNull();
   });
 });
+
+/**
+ * The same contract the fakes are held to, against Durable Object SQLite.
+ *
+ * Several hundred tests run against the in-memory stores. That makes them fast,
+ * and makes them fiction if the real ones behave differently — which nothing
+ * checked. Same words, both implementations.
+ */
+describeJobStore('the SQLite store', (use) => inStorage((sql) => use(new SqliteJobStore(sql))));
+describeLogStore('the SQLite store', (use) => inStorage((sql) => use(new SqliteLogStore(sql))));
