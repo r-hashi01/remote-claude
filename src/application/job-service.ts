@@ -878,36 +878,52 @@ export class JobService {
       await artifacts.putResult(jobId, redact(resultRaw));
     }
 
+    // Before settling, so that a job reporting itself finished is one whose pull
+    // request exists. It used to run after, and a client that waits for the job to
+    // finish then printed "apply locally" while the pull request it had asked for
+    // was being opened a moment later — the one line that lets somebody without
+    // this CLI see the work, missing exactly when there was work to see.
+    const pullRequestUrl =
+      phase === 'completed'
+        ? await this.tryOpenPullRequest(jobId, result)
+        : undefined;
+
     await this.settle(
       jobId,
       phase === 'completed' ? 'completed' : 'failed',
       error,
       result,
+      pullRequestUrl,
     );
-    if (phase === 'completed') await this.tryOpenPullRequest(jobId);
   }
 
   /**
    * Open the pull request this job asked for.
    *
-   * After settling, deliberately: the job is finished either way. A pull request
-   * that cannot be opened is reported and nothing more — the branch is pushed, so
-   * the work is not lost, and failing a completed job over the paperwork would
-   * throw away a result that exists.
+   * Never fatal: a pull request that cannot be opened is reported and nothing
+   * more — the branch is pushed, so the work is not lost, and failing a completed
+   * job over the paperwork would throw away a result that exists. That rule is
+   * about failure and was mistaken for a rule about order.
+   *
+   * The result is passed in rather than read back off the record, because the
+   * record does not carry it yet: this now runs before the job is settled.
    */
-  private async tryOpenPullRequest(jobId: string): Promise<void> {
+  private async tryOpenPullRequest(
+    jobId: string,
+    result: JobResult | undefined,
+  ): Promise<string | undefined> {
     const { jobs, logs, github } = this.deps;
     const job = jobs.load(jobId);
-    if (!job?.pullRequestRequest) return;
+    if (!job?.pullRequestRequest) return undefined;
 
     const record = job.toRecord();
-    if (!record.result?.pushed) {
+    if (!result?.pushed) {
       this.log(jobId, 'system', 'no pull request: nothing was pushed');
       logs.flush(jobId);
-      return;
+      return undefined;
     }
 
-    const content = composePullRequest(record, record.result);
+    const content = composePullRequest(record, result);
     try {
       const url = await github.openPullRequest({
         repo: record.repo,
@@ -915,12 +931,9 @@ export class JobService {
         base: record.baseBranch,
         ...content,
       });
-      const current = jobs.load(jobId);
-      if (current) {
-        current.recordPullRequest(url);
-        jobs.save(current);
-      }
       this.log(jobId, 'system', `pull request opened: ${url}`);
+      logs.flush(jobId);
+      return url;
     } catch (error) {
       this.log(
         jobId,
@@ -928,8 +941,9 @@ export class JobService {
         `pull request could not be opened: ${errorMessage(error)}. ` +
           `The branch ${record.branch} is pushed; open it by hand.`,
       );
+      logs.flush(jobId);
+      return undefined;
     }
-    logs.flush(jobId);
   }
 
   private async settle(
@@ -937,6 +951,7 @@ export class JobService {
     status: 'completed' | 'failed' | 'cancelled',
     error?: string,
     result?: JobResult,
+    pullRequestUrl?: string,
   ): Promise<void> {
     const { jobs, logs, clock, redact, running } = this.deps;
 
@@ -954,6 +969,7 @@ export class JobService {
     // the seconds the upload takes. Which is most of the time, not rarely.
     const workspace = settled ? await this.carryWorkspace(jobId) : null;
     if (job && workspace) job.recordWorkspace(workspace);
+    if (job && pullRequestUrl) job.recordPullRequest(pullRequestUrl);
 
     if (settled && job) {
       jobs.save(job);

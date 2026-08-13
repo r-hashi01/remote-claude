@@ -189,3 +189,46 @@ describe('a refusal survives being thrown across a Durable Object', () => {
     }
   });
 });
+
+/**
+ * Everything the API accepts has to be reachable from the client shipped with it.
+ *
+ * Three capabilities existed in the API and the SDK and not in this CLI: naming a
+ * repository, continuing a job, and supplying the commands to run. The first was
+ * found by a verification job answering about the wrong repository; the third by
+ * noticing that two throwaway scripts existed only because the CLI could not do
+ * it. None of them were hard — they were invisible, which is why this is a test
+ * and not a habit.
+ *
+ * The awkward part is that the names differ by design: `skipChecks` is
+ * `--skip-checks`, `commands` is four separate flags. So the CLI states the
+ * mapping and this checks the mapping is total.
+ */
+describe('the CLI can express every job the API accepts', () => {
+  /** Field names of an interface in the SDK's wire types. */
+  function fieldsOf(interfaceName: string): string[] {
+    const source = read('sdk/src/domain/job.ts');
+    const body = new RegExp(`export interface ${interfaceName} \\{([\\s\\S]*?)\\n\\}`).exec(source);
+    expect(body, `no interface ${interfaceName}`).not.toBeNull();
+    return [...withoutComments(body?.[1] ?? '').matchAll(/^\s{2}([a-zA-Z]+)\??:/gm)].map(
+      (match) => match[1] as string
+    );
+  }
+
+  /** The map the CLI declares from those fields to its own spelling. */
+  function mapped(constName: string): string[] {
+    const source = read('cli/remote-claude.mjs');
+    const body = new RegExp(`const ${constName} = \\{([\\s\\S]*?)\\n\\};`).exec(source);
+    expect(body, `no ${constName} in the CLI`).not.toBeNull();
+    return [...withoutComments(body?.[1] ?? '').matchAll(/^\s{2}([a-zA-Z]+):/gm)].map(
+      (match) => match[1] as string
+    );
+  }
+
+  test.each([
+    ['StartJob', 'RUN_OPTIONS'],
+    ['ContinueJob', 'CONTINUE_OPTIONS'],
+  ])('%s is covered by %s', (interfaceName, constName) => {
+    expect(mapped(constName).sort()).toEqual(fieldsOf(interfaceName).sort());
+  });
+});
