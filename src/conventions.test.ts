@@ -255,3 +255,89 @@ describe('the CLI can express every job the API accepts', () => {
     expect(mapped(constName).sort()).toEqual(fieldsOf(interfaceName).sort());
   });
 });
+
+/**
+ * A flag the documentation offers has to be one that command accepts.
+ *
+ * `--pr` was in the usage text, in the README, and in the skill. `cmdRun` read
+ * `opts.pr`. It was never in that command's list of flags, so it was rejected as
+ * an unknown option — for as long as it had been documented. Opening a pull
+ * request is how this executor hands work back, and the way it was advertised was
+ * the one way it could not be asked for.
+ *
+ * Checked per command rather than across the whole CLI. The first version of this
+ * check asked only whether some command somewhere accepted the flag, and it did
+ * not fail when `--pr` was taken back off `run` — `continue` still had it. A
+ * guard that does not fail on the defect it was written for is worse than none.
+ *
+ * Quoted strings are stripped first: a documented example passes commands to the
+ * job (`--install "npm ci --no-audit"`), and npm's flags are not this CLI's.
+ */
+describe('the documentation only offers flags the command has', () => {
+  const cli = read('cli/remote-claude.mjs');
+
+  /** command word → the name of the function that handles it. */
+  const handlers = new Map(
+    [...(/const COMMANDS = \{([\s\S]*?)\n\};/.exec(cli)?.[1] ?? '').matchAll(
+      /(\w+): (cmd\w+)/g
+    )].map((match) => [match[1] as string, match[2] as string])
+  );
+
+  /** Everything that function will accept, however it reads it. */
+  function accepts(functionName: string): Set<string> {
+    const from = cli.indexOf(`async function ${functionName}(`);
+    expect(from, `no ${functionName}`).toBeGreaterThan(-1);
+    const next = cli.indexOf('\nasync function ', from + 1);
+    const body = cli.slice(from, next === -1 ? undefined : next);
+    return new Set([
+      // Declared for the argument parser…
+      ...[...body.matchAll(/(?:flags|values): \[([^\]]*)\]/g)]
+        .flatMap((match) => [...(match[1] as string).matchAll(/'([a-z-]+)'/g)])
+        .map((match) => match[1] as string),
+      // …or read straight off argv by a command with no options of its own.
+      ...[...body.matchAll(/includes\('--([a-z][a-z-]+)'\)/g)].map((match) => match[1] as string),
+    ]);
+  }
+
+  test.each(['README.md', 'docs/usage.md', '.claude/skills/delegate/SKILL.md'])('%s', (path) => {
+    const unaccepted: string[] = [];
+
+    for (const line of read(path).split('\n')) {
+      const invocation = /remote-claude(?:\.mjs)?\s+(\S*)/.exec(line);
+      if (!invocation) continue;
+      // A bare prompt is shorthand for `run`, exactly as the CLI treats it.
+      const command = handlers.has(invocation[1] as string) ? (invocation[1] as string) : 'run';
+      const handler = handlers.get(command);
+      if (!handler) continue;
+
+      const unquoted = line.replace(/"[^"]*"/g, '').replace(/'[^']*'/g, '');
+      for (const match of unquoted.matchAll(/(?<!\w)--([a-z][a-z-]+)/g)) {
+        const flag = match[1] as string;
+        // Handled before the parser sees anything.
+        if (flag === 'help') continue;
+        if (!accepts(handler).has(flag)) unaccepted.push(`${command} --${flag}`);
+      }
+    }
+
+    expect(unaccepted).toEqual([]);
+  });
+
+  /**
+   * The options table in the usage document is the reference somebody reads
+   * before writing a command, so it is checked as well — command lines are where
+   * copy-paste happens, and this is where belief is formed. Prose elsewhere is not
+   * checked: a flag named in a sentence cannot be told apart from npm's.
+   */
+  test('the options table in docs/usage.md', () => {
+    const rows = [...read('docs/usage.md').matchAll(/^\| `\w+` \| ([^|]+)\|/gm)];
+    expect(rows.length, 'no options table found').toBeGreaterThan(5);
+
+    const offered = rows
+      .flatMap((row) => [...(row[1] as string).matchAll(/`--([a-z][a-z-]+)`/g)])
+      .map((match) => match[1] as string);
+    expect(offered.length, 'a table with no flags in it').toBeGreaterThan(5);
+
+    const run = accepts(handlers.get('run') as string);
+    expect(offered.filter((flag) => !run.has(flag))).toEqual([]);
+  });
+});

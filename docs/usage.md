@@ -48,6 +48,7 @@ does that, so that what it changed and what was recorded cannot disagree.
 ```bash
 remote-claude "<prompt>"              # start a job and follow it
 remote-claude run "<prompt>" [opts]   # the same, explicitly
+remote-claude continue <job-id> "<reply>"   # answer a finished job, same conversation
 remote-claude status <job-id>
 remote-claude logs <job-id> [-f]
 remote-claude diff <job-id>
@@ -85,9 +86,9 @@ jobs while the jobs themselves keep running.
 | --- | --- | --- | --- |
 | `prompt` | positional | — | Required. Up to 20,000 characters |
 | `baseBranch` | `--base` | the deployment's `DEFAULT_BASE_BRANCH` | What to branch from |
-| `branch` | — | `claude/<job-id>` | Work on a named branch instead |
-| `repo` | — | the deployment's `REPO_URL` | [Another repository](#another-repository) |
-| `commands` | — | the deployment's | [Per-job commands](#per-job-commands) |
+| `branch` | `--branch` | `claude/<job-id>` | Work on a named branch instead |
+| `repo` | `--repo` | the deployment's `REPO_URL` | [Another repository](#another-repository) |
+| `commands` | `--install` `--lint` `--test` `--build` | the deployment's | [Per-job commands](#per-job-commands) |
 | `skipChecks` | `--skip-checks` | `false` | Skip lint/test/build. **Not install** |
 | `push` | `--push` | `false` | Push the work branch |
 | `pullRequest` | `--pr` | — | Push and open a pull request |
@@ -189,6 +190,10 @@ ask — which is the right behaviour when the answer changes what should be buil
 and the answer goes back as a follow-up turn:
 
 ```bash
+remote-claude continue <job-id> "use the interface stub"
+```
+
+```bash
 curl -X POST .../jobs/<job-id>/continue -d '{"prompt": "use the interface stub"}'
 ```
 
@@ -202,13 +207,18 @@ opened for it stays the right one. Only the prompt is required; the repository,
 base, branch and commands are inherited, and the job options override rather than
 reset ([ADR 0011](adr/0011-continue-a-job-rather-than-steer-it.md)).
 
+A job that was **cancelled while the agent was working** can be continued too,
+and that is the most useful form of it: the reason to cancel is usually that the
+run needed steering, and by then there is a conversation to steer. `cancel`
+followed by `continue` is a supported move.
+
 It is refused, rather than quietly turned into a fresh start, when:
 
 | | |
 | --- | --- |
-| the job has not finished | there is no stored workspace yet |
+| the job has not finished | there is nothing stored yet. A job that reports itself finished always has its workspace — that is enforced |
 | the deployment kept no workspace | no bucket is bound, or it has expired — they live as long as the job record |
-| the job never started a conversation | it stopped before the agent ran. Submit a new job instead |
+| the job never started a conversation | it stopped before the agent ran. The tree is untouched, so a new job loses nothing |
 
 In practice, the executor prints two lines the job itself never sees:
 
@@ -242,7 +252,18 @@ rather than during the clone ([ADR 0010](adr/0010-the-credential-defines-the-rep
 The URL must still be `https` on `github.com` with no embedded credentials.
 
 To narrow what a deployment can touch, remove repositories from the App
-installation. The CLI has no `--repo`; use the SDK or HTTP.
+installation.
+
+`--repo` and `--install` go together. A deployment's install command was written
+for the repository it is configured with, and install runs even when checks are
+skipped, so `--repo` on its own runs the wrong install against the right
+repository:
+
+```bash
+remote-claude run "<prompt>" \
+  --repo https://github.com/owner/name.git --base main \
+  --install "npm ci --no-audit --no-fund" --lint "npm run typecheck" --test "npm test"
+```
 
 ## Writing a prompt that survives one shot
 

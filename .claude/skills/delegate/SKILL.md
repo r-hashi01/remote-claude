@@ -80,17 +80,10 @@ spindle 用の値（`npm --prefix packages/spindle-core ...`）が入ってい�
 なので **`commands` を job ごとに渡す。** 指定しなかったキーは deployment の値を継ぐ。
 空文字は「その step を skip」という**指示**なので、そう書けば skip になる。
 
-```ts
-const job = await rc.startJob({
-  prompt,
-  repo: 'https://github.com/r-hashi01/remote-claude.git',
-  commands: {
-    install: 'npm ci --no-audit --no-fund',
-    lint: 'npm run typecheck',
-    test: 'npm test',
-    build: '',
-  },
-});
+```bash
+./cli/remote-claude.mjs run "..." \
+  --repo https://github.com/r-hashi01/remote-claude.git --base main \
+  --install "npm ci --no-audit --no-fund" --lint "npm run typecheck" --test "npm test" --build ""
 ```
 
 こうすると **executor のパイプライン自身が検証する**（結果は `result.steps` に残る）。
@@ -99,12 +92,14 @@ const job = await rc.startJob({
 
 ### 別のリポジトリを対象にする
 
-```bash
-./cli/remote-claude.mjs run "..." --base main   # 既定は REPO_URL、commands も deployment のもの
-```
+`--repo` と `--install` は**セットで使う**。`--repo` だけ渡すと、対象が別 repo でも
+deployment（spindle 用）の install が走る。
 
-CLI は `repo` も `commands` も渡す口を持っていない。別 repo に投げるなら SDK か HTTP を使う
-（上の例）。
+```bash
+./cli/remote-claude.mjs run "..." \
+  --repo https://github.com/r-hashi01/remote-claude.git --base main \
+  --install "npm ci --no-audit --no-fund" --lint "npm run typecheck" --test "npm test"
+```
 
 **GitHub App installation が到達できる repo に限る**（ADR 0010）。届かなければ受付時に
 400 で拒否され、cloneまで待たない。届いていない場合のメッセージには installation ID と
@@ -129,6 +124,11 @@ CLI は `repo` も `commands` も渡す口を持っていない。別 repo に�
 ./cli/remote-claude.mjs apply <job-id>    # working tree に当てる
 ```
 
+最初から PR にするなら `--pr` を付けて投げる（`--push` を含意する）。
+executor が自分でブランチを push し、PR を開く。title は prompt の1行目、
+body は prompt と diffstat と実行した step —— **agent の締めの発言ではない**。
+完了時点で `pullRequestUrl` が記録に載っているので、`status` に出る。
+
 **当てたら必ず自分で検証する。** サンドボックス内で通ったことは、ここで通ることを意味しない
 （install コマンドを skip しているのだから特に）。
 
@@ -143,7 +143,24 @@ npm test && npm run typecheck
 - 層を越えていないか見る（`src/domain/**` に platform 型が入っていないか）
 - commit するかはユーザーに確認する。既定ブランチにいるならブランチを切る
 
-## 6. 失敗の読み方
+## 6. 途中で止まったジョブに答える
+
+agent が質問して止まったとき、新しいジョブを立てると**質問の文脈が失われる**。
+その場合は継続する。workspace が復元され、会話も `--resume` で続く。
+
+```bash
+./cli/remote-claude.mjs continue <job-id> "A で行こう"
+```
+
+代名詞や「そのうち最初の1つ」で通じる（前ターンを見ている）。継続できる終わり方は3つのうち2つ:
+
+| 元のジョブ | continue |
+|---|---|
+| 完了 | できる |
+| agent 実行中に `cancel` した | **できる** — 軌道修正はこれが本筋 |
+| agent より前に失敗（install が落ちた等） | できない。会話が無いので新規ジョブを立てる |
+
+## 7. 失敗の読み方
 
 executor のエラー文は原因を指すように書かれている。**言い換えずにそのまま伝える。**
 
@@ -157,10 +174,12 @@ executor のエラー文は原因を指すように書かれている。**言い
 | `installation cannot reach <owner/name>` | GitHub App installation にその repo が入っていない | GitHub → Settings → Applications → Configure → Repository access |
 | `pushing is disabled on it` | `ALLOW_PUSH=false` | diff を持ち帰って手元で push する |
 | `cloning ... at branch "<x>" failed` | branch が無いか、権限が無い | base branch 名を確認 |
+| `never started a conversation — it stopped before the agent ran` | continue しようとしたが会話が無い | 新規ジョブを立てる（木も変更前のままなので損は無い） |
+| `kept no workspace, so there is nothing to continue` | workspace が保存されていない（bucket 未設定、または保持期限切れ） | 新規ジョブ。設定は ADR 0011 |
 
 失敗したジョブでも `usage` と `finalText` は残る。`status <job-id>` で見える。
 
-## 7. 後片付け
+## 8. 後片付け
 
 ```bash
 ./cli/remote-claude.mjs sandboxes
