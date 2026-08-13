@@ -1255,3 +1255,67 @@ describe('a job that asked for a pull request', () => {
     expect(settled?.toRecord().pullRequestUrl).toBe('https://github.com/o/r/pull/1');
   });
 });
+
+/**
+ * Whatever a finished job promises, it has already by the time it says so.
+ *
+ * Two defects of one shape were found a day apart, both by a person doing the
+ * obvious thing immediately after a job finished. The workspace was stored after
+ * the terminal status, so answering a job that had just finished was refused for
+ * having nothing to continue. The pull request was opened after it, so a job that
+ * had opened one reported "apply locally" instead of its URL.
+ *
+ * Fixing them one at a time leaves the shape in place: anything added to the end
+ * of a job later will land after the status again, and the test for it will pass
+ * because the test will look afterwards. So this states the invariant instead —
+ * observed at the instant the record first says the job is over, which is the
+ * instant a client can act on it.
+ */
+describe('the moment a job reports itself finished', () => {
+  test('everything a client can then ask for already exists', async () => {
+    const github = new AllowAllGitHub();
+    const h = harness({ policy: policy({ allowPush: true }), github });
+    const job = await h.service.createJob({ prompt: 'x', push: true, pullRequest: {} });
+    await h.service.tick();
+
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() })
+    );
+    sandbox.files.set(`${STATE_DIR}/patch.diff`, 'diff --git a/a b/a\n');
+    sandbox.files.set(
+      `${STATE_DIR}/result.json`,
+      JSON.stringify({
+        changed: true,
+        pushed: true,
+        commitSha: 'abcdef1234',
+        branch: job.branch,
+        claudeOutput: '',
+        gitStatus: '',
+        diffStat: ' a | 1 +',
+        diffBytes: 19,
+        steps: [{ name: 'install', command: 'npm ci', exitCode: 0, success: true, durationMs: 1, output: '' }],
+      })
+    );
+
+    // The first write that says the job is over, and what was true of the world
+    // at that write.
+    let atTheMoment: { record: ReturnType<Job['toRecord']>; patchStored: boolean } | null = null;
+    h.jobs.onSave = (saved) => {
+      if (atTheMoment || !saved.isTerminal) return;
+      atTheMoment = { record: saved.toRecord(), patchStored: h.artifacts.patches.has(job.id) };
+    };
+
+    await h.service.tick();
+
+    expect(atTheMoment).not.toBeNull();
+    const { record, patchStored } = atTheMoment!;
+    // What the API offers about a finished job, each one asked for by something:
+    expect(record.status).toBe('completed');
+    expect(record.result?.steps?.length, 'the steps it ran').toBeGreaterThan(0);
+    expect(record.workspace, 'so it can be continued').toBeDefined();
+    expect(record.pullRequestUrl, 'so the work can be seen without this CLI').toBeDefined();
+    expect(patchStored, 'so the diff can be fetched').toBe(true);
+  });
+});
