@@ -61,3 +61,55 @@ describe('redacting a window of a growing file', () => {
     expect(window).toEqual({ text: '', nextOffset: 128 });
   });
 });
+
+/**
+ * Offsets are bytes of the file. Strings are counted in something else.
+ *
+ * Found live, in the first run watched through the CLI:
+ *
+ *   attaches the credenticredential outside the container
+ *   Switched to Switched to
+ *
+ * `▶`, `✔` and `—` are three bytes each and one character each. `tail -c` counts
+ * bytes; `chunk.length` counts UTF-16 code units. So every multi-byte character
+ * in a window left the next offset short by two, the following read started
+ * inside what had already been shown, and the overlap arrived as duplicated
+ * fragments — of a credential-shaped line, in the first instance.
+ */
+describe('offsets over text that is not all ASCII', () => {
+  const redact = createRedactor([]);
+
+  test('advance by bytes, not by characters', () => {
+    const body = `▶ install\n`.padEnd(HOLD_BACK_BYTES + 40, '.');
+    const bytes = new TextEncoder().encode(body).length;
+    expect(bytes).toBeGreaterThan(body.length);
+
+    const window = redactWindow(body, { redact, final: true, offset: 0 });
+
+    expect(window.nextOffset).toBe(bytes);
+  });
+
+  test('advance by bytes when a tail is withheld too', () => {
+    const marker = '✔ verify-environment — done\n';
+    const body = marker + 'x'.repeat(HOLD_BACK_BYTES * 2);
+
+    const window = redactWindow(body, { redact, final: false, offset: 100 });
+
+    const emittedBytes = new TextEncoder().encode(window.text).length;
+    expect(window.nextOffset).toBe(100 + emittedBytes);
+  });
+
+  // What the duplication actually looked like: read two starting before read one
+  // finished, so the reader was shown the same characters twice.
+  test('two reads in sequence show each byte once', () => {
+    const body = '— checked ANTHROPIC_API_KEY: none is set —\n'.repeat(20);
+    const encoder = new TextEncoder();
+
+    const first = redactWindow(body, { redact, final: false, offset: 0 });
+    // What the executor would read next, in bytes, as `tail -c +N` counts them.
+    const remaining = new TextDecoder().decode(encoder.encode(body).slice(first.nextOffset));
+    const second = redactWindow(remaining, { redact, final: true, offset: first.nextOffset });
+
+    expect(first.text + second.text).toBe(body);
+  });
+});

@@ -1351,7 +1351,9 @@ describe('reading a job\'s terminal output', () => {
     // Withheld against a secret straddling the end, because more may arrive.
     expect(window.text).toBe('');
     expect(window.nextOffset).toBe(0);
-    expect(window.size).toBe('▶ install\nadded 101 packages\n'.length);
+    // In bytes, which is what an offset into the file counts. `▶` is three of
+    // them and one character, and conflating the two duplicated output live.
+    expect(window.size).toBe(new TextEncoder().encode('▶ install\nadded 101 packages\n').length);
     expect(window.done).toBe(false);
   });
 
