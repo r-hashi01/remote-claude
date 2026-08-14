@@ -372,26 +372,47 @@ function skip(name, reason) {
  * the desired result.
  *
  * Credentials reach this container by being attached outside it — the Worker's
- * outbound handler swaps in the Anthropic token and attaches GitHub's as Basic
- * auth (ADR 0002) — so anything found here arrived by a route nobody intended.
+ * outbound handler swaps in the Anthropic credential and attaches GitHub's as
+ * Basic auth (ADR 0002) — so anything found here arrived by a route nobody
+ * intended.
+ *
+ * Which Anthropic variables are foreign depends on the credential the deployment
+ * holds, and it is the *other* scheme's that must be absent. Under a
+ * subscription that is `ANTHROPIC_API_KEY`, which would move the bill to
+ * pay-as-you-go; under an API key it is `CLAUDE_CODE_OAUTH_TOKEN`, which would
+ * route a paying job through somebody's personal plan. The scheme's own variable
+ * is expected to be set — in proxy mode to a sentinel, in direct mode to the real
+ * credential — so it is not checked here. This list mirrors
+ * `foreignCredentialVariables` in the Worker; the two sides cannot import from
+ * one another, and disagreeing means either a job that fails while correctly
+ * configured or a check that passes while billing the wrong account.
  *
  * A check is a shell command that exits zero when the environment is as promised
  * and prints a line either way. Written as data so the next invariant is an
  * entry rather than a rewrite; nothing here assumes the check is about variables,
  * only that it reports and exits.
  */
-const ENVIRONMENT_CHECKS = [
-  absent(
-    ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],
-    'Claude Code will use the subscription credential',
-    'this environment must use the subscription credential only'
-  ),
-  absent(
-    ['GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_APP_PRIVATE_KEY'],
-    'git reaches GitHub through the Worker, which attaches the credential outside the container',
-    'this container must never hold a GitHub credential'
-  ),
-];
+function environmentCheckList(authScheme) {
+  const apiKeyScheme = authScheme === 'api-key';
+  return [
+    apiKeyScheme
+      ? absent(
+          ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'],
+          'Claude Code will use the API key this deployment is configured with',
+          'this environment must use the configured API key only'
+        )
+      : absent(
+          ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],
+          'Claude Code will use the subscription credential',
+          'this environment must use the subscription credential only'
+        ),
+    absent(
+      ['GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_APP_PRIVATE_KEY'],
+      'git reaches GitHub through the Worker, which attaches the credential outside the container',
+      'this container must never hold a GitHub credential'
+    ),
+  ];
+}
 
 /** A check that these variables are unset, and says so in both directions. */
 function absent(variables, whyGood, whyBad) {
@@ -404,8 +425,19 @@ function absent(variables, whyGood, whyBad) {
 }
 
 /** Every check, in one script, failing if any of them failed. */
-function environmentChecks() {
-  return `failed=0\n${ENVIRONMENT_CHECKS.map((check) => `{ ${check} ; } || failed=1`).join('\n')}\nexit $failed`;
+function environmentChecks(authScheme) {
+  const checks = environmentCheckList(authScheme);
+  return `failed=0\n${checks.map((check) => `{ ${check} ; } || failed=1`).join('\n')}\nexit $failed`;
+}
+
+/**
+ * The credential variables this run must not use, cleared in the shell that runs
+ * `claude` — the middle of the three layers described above.
+ */
+function unsetForeignCredentials(authScheme) {
+  return authScheme === 'api-key'
+    ? 'unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN;'
+    : 'unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN;';
 }
 
 // -------------------------------------------------------------- the job
@@ -417,10 +449,18 @@ async function main() {
   const job = JSON.parse(readFileSync(`${STATE_DIR}/job.json`, 'utf8'));
   workBranch = job.branch ?? null;
   const { commands = {}, options = {} } = job;
+  // Defaulted, because a runner shipped with one job and read by another is the
+  // drift ADR 0007 is about: an older Worker writes no `authScheme`, and the
+  // scheme this executor had until there were two of them is the subscription.
+  const authScheme = job.authScheme === 'api-key' ? 'api-key' : 'subscription';
 
   setStatus('preparing');
   log('system', `job ${job.id}`);
   log('system', `base branch ${job.baseBranch} → work branch ${job.branch}`);
+  // Named because it decides which account pays and which model did the work,
+  // and neither is recoverable from the diff afterwards. Never a value: the
+  // credential is not here to print (ADR 0002).
+  log('system', `credential ${authScheme}, model ${job.model ?? 'claude-code default'}`);
 
   // The repository is cloned by the Worker before this starts: cloning needs
   // credentials injected outside the container, which is exactly what this
@@ -439,7 +479,7 @@ async function main() {
   // wrongly.
   //
   // Names are printed, never values.
-  const environment = await run('verify-environment', environmentChecks(), {
+  const environment = await run('verify-environment', environmentChecks(authScheme), {
     allowFailure: true,
   });
   if (!environment.success) {
@@ -466,9 +506,12 @@ async function main() {
   const claude = await run(
     'claude-code',
     [
-      'unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN;',
+      unsetForeignCredentials(authScheme),
       'claude -p',
       shellQuote(job.prompt),
+      // Absent means Claude Code's own default, which is what a deployment that
+      // has not chosen a model wants — the default moves as models are released.
+      ...(job.model ? ['--model', shellQuote(job.model)] : []),
       // A follow-up turn carries on the conversation the previous one had, which
       // is the difference between answering a question and being asked it again.
       ...(job.resumeSession ? ['--resume', shellQuote(job.resumeSession)] : []),

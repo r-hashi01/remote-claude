@@ -1,4 +1,5 @@
 import type { ExecutorPolicy } from '../application/ports';
+import { claudeCredential } from '../domain/agent/credential';
 import {
   DEFAULT_HEARTBEAT_TIMEOUT_MS,
   DEFAULT_STALL_TIMEOUT_MS,
@@ -15,6 +16,14 @@ import type { Env } from './env';
  */
 export interface Config extends ExecutorPolicy {
   claudeAuthMode: 'proxy' | 'direct';
+  /**
+   * Why no request to Anthropic will succeed, when that is the case.
+   *
+   * Carried rather than thrown: this is read in a Durable Object constructor,
+   * and a deployment with no credential should still answer `GET /jobs` and say
+   * what is wrong when asked — not fail to wake up.
+   */
+  claudeCredentialProblem?: string;
   allowedHosts: string[];
 }
 
@@ -42,11 +51,25 @@ function bool(value: string | undefined, fallback = false): boolean {
 
 export function loadConfig(env: Env): Config {
   const mode = (env.CLAUDE_AUTH_MODE ?? 'proxy').trim().toLowerCase();
+  // Derived from which credential is configured, not from a flag — see
+  // `domain/agent/credential.ts` for why there is no flag.
+  const credential = claudeCredential({
+    oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+    apiKey: env.ANTHROPIC_API_KEY,
+  });
 
   return {
     repoUrl: env.REPO_URL,
     defaultBaseBranch: env.DEFAULT_BASE_BRANCH || 'main',
     claudeAuthMode: mode === 'direct' ? 'direct' : 'proxy',
+    claudeAuthScheme: credential.scheme,
+    claudeCredentialProblem: credential.problem,
+    // Trimmed, and otherwise taken as written. Unlike a job's model this is not
+    // validated for shape: it is the deployer's own string, it is shell-quoted
+    // before it reaches `claude`, and a name that means nothing fails at the
+    // agent step with Claude Code's own message — which names the model and the
+    // alternatives, and is better than anything this file could say about it.
+    model: env.CLAUDE_MODEL?.trim() || undefined,
     maxConcurrency: num(env.MAX_CONCURRENCY, 3),
     jobTimeoutMs: num(env.JOB_TIMEOUT_MS, 30 * 60 * 1000),
     claudeTimeoutMs: num(env.CLAUDE_TIMEOUT_MS, 25 * 60 * 1000),

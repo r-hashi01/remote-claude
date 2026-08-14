@@ -253,6 +253,9 @@
       ["tokens out", u ? String(u.outputTokens) : "—"],
       ["turns", u && u.turns ? String(u.turns) : "—"],
       ["cost", u && typeof u.costUsd === "number" ? "$" + u.costUsd.toFixed(4) : "—"],
+      // Only when the job chose one. A dash means the deployment's model, which
+      // is a fact about the deployment rather than about this job.
+      ["model", esc(job.model || "—")],
       ["branch", esc(job.branch || "—")]
     ];
 

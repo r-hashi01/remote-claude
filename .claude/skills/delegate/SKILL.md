@@ -29,7 +29,7 @@ description: Run an implementation task on the deployed remote-claude (Cloudflar
 
 ```bash
 ./cli/remote-claude.mjs health          # Worker が生きているか
-./cli/remote-claude.mjs health --auth   # claude を1回叩いて subscription 認証を確認
+./cli/remote-claude.mjs health --auth   # claude を1回叩いて認証を確認（scheme と model も出る）
 ./cli/remote-claude.mjs sandboxes       # 未回収の sandbox がないか（あれば枠を埋めている）
 ```
 

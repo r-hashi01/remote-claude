@@ -67,7 +67,9 @@ export class JobManager extends DurableObject<Env> {
       containerEnvironment: () =>
         claudeProcessEnvironment({
           authMode: config.claudeAuthMode,
+          scheme: config.claudeAuthScheme,
           oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+          apiKey: env.ANTHROPIC_API_KEY,
           ci: true,
         }),
     });

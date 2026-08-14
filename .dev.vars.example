@@ -2,9 +2,18 @@
 # It is covered by the repository .gitignore - verify with:
 #   git check-ignore -v infra/remote-claude/.dev.vars
 
+# The Claude credential. Exactly ONE of the two below — which one is set is what
+# selects the auth scheme, and there is no variable that overrides that choice.
+# Both set means every job is refused with a message saying so, because which
+# account pays would be undecided.
+
 # Long-lived Claude subscription OAuth token.
 # Generate locally with:  claude setup-token
 CLAUDE_CODE_OAUTH_TOKEN=
+
+# …or a Claude API key from https://platform.claude.com/ — pay-as-you-go, and the
+# credential to use when anything other than you at a keyboard drives this.
+# ANTHROPIC_API_KEY=
 
 # Shared bearer token that guards this Worker's HTTP API.
 # Generate with:  openssl rand -hex 32
@@ -24,5 +33,6 @@ GITHUB_APP_INSTALLATION_ID=
 # R2_ACCESS_KEY_ID=
 # R2_SECRET_ACCESS_KEY=
 
-# NOTE: ANTHROPIC_API_KEY is deliberately absent and must never be set here.
-# This environment authenticates with a Claude subscription via OAuth only.
+# NOTE: never set both Claude credentials. A deployment authenticates with one of
+# them, and holding two is refused rather than resolved by precedence — see
+# docs/adr/0014-two-credentials-one-at-a-time.md.

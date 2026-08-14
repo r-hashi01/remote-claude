@@ -17,25 +17,34 @@ remote-claude "Investigate the 500 on login and fix it"
 > ([ADR 0003](docs/adr/0003-separate-execution-from-product.md)). The product
 > built on this one is [spindle](https://github.com/r-hashi01/spindle).
 
-> **You deploy it, and it works for you.** Claude Code signs in with a
-> subscription, and Anthropic's
+> **Which credential decides who may use it.** A deployment holds exactly one:
+> a Claude subscription token, or a
+> [Claude API key](https://platform.claude.com/)
+> ([ADR 0014](docs/adr/0014-two-credentials-one-at-a-time.md)).
+>
+> On a **subscription**, it works for you and only you. Anthropic's
 > [terms for Claude Code](https://code.claude.com/docs/en/legal-and-compliance)
 > say OAuth "is intended exclusively for purchasers of Claude Free, Pro, Max,
 > Team, and Enterprise subscription plans", while Anthropic "does not permit
 > third-party developers to offer Claude.ai login or to route requests through
-> Free, Pro, or Max plan credentials on behalf of their users."
+> Free, Pro, or Max plan credentials on behalf of their users." The line is not
+> about where the container runs — deploying this to your own Cloudflare account
+> is no different from renting a VM and running Claude Code on it. The line is
+> whether a product stands between somebody and their own credential. So: deploy
+> your own, use it yourself, and do not let other people send prompts to it.
 >
-> The line is not about where the container runs — deploying this to your own
-> Cloudflare account is no different from renting a VM and running Claude Code on
-> it. The line is whether a product stands between somebody and their own
-> credential. So: deploy your own, use it yourself. Do not run one and let other
-> people send prompts to it; if you are building something for other people, that
-> is what [API keys and the commercial terms](https://platform.claude.com/) are
-> for, and the flat-subscription economics below do not survive the move.
+> On an **API key**, that is the credential those terms point developers at, and
+> the arrangement they describe. The flat-subscription economics below do not
+> survive the move: you pay per token, an unattended loop is a bill that grows
+> while nobody watches it, and [Cost](docs/operating.md#cost) is where to look
+> before turning one on.
 >
-> The API cannot be handed a credential — no request type has a field for one, and
-> [a test](src/conventions.test.ts) fails if somebody adds one. Everything else
-> here is a decision you have to keep making. [Security](SECURITY.md).
+> Either way the API cannot be handed a credential — no request type has a field
+> for one, and [a test](src/conventions.test.ts) fails if somebody adds one. A
+> deployment is somebody's own tool, whichever credential it holds
+> ([ADR 0013](docs/adr/0013-the-executor-belongs-to-whoever-deployed-it.md)).
+> Everything else here is a decision you have to keep making.
+> [Security](SECURITY.md).
 
 ## Documentation
 
@@ -62,10 +71,10 @@ Cloudflare Worker ─── control plane only; Claude Code never runs here
    ▼ Sandbox SDK
 Cloudflare Sandbox / container ─── one job, one container
    ├── /workspace/repo         the checkout
-   ├── claude                  authenticated by subscription OAuth
+   ├── claude                  a subscription token, or a Claude API key
    ├── git, node, python, build tools
    │
-   ├──▶ api.anthropic.com      the Worker injects the real token on the way out
+   ├──▶ api.anthropic.com      the Worker injects the real credential on the way out
    └──▶ github.com             the Worker injects a GitHub App token on the way out
         every other destination is blocked
 ```
@@ -73,10 +82,10 @@ Cloudflare Sandbox / container ─── one job, one container
 Two properties follow from that shape, and most of the design serves them.
 
 **No credential is inside the container.** The container holds a placeholder.
-The Worker's outbound handler swaps in the real Claude token, and a short-lived
-GitHub App installation token, as requests leave — so nothing sensitive is on the
-sandbox filesystem, in its environment, in the image, or in any backup
-([ADR 0002](docs/adr/0002-no-credentials-inside-the-container.md)).
+The Worker's outbound handler swaps in the real Claude credential, and a
+short-lived GitHub App installation token, as requests leave — so nothing
+sensitive is on the sandbox filesystem, in its environment, in the image, or in
+any backup ([ADR 0002](docs/adr/0002-no-credentials-inside-the-container.md)).
 
 **The pipeline runs in the container, not in the Worker.** A Durable Object gets
 30 seconds of CPU between requests, which once capped jobs at about 51 seconds.
@@ -92,8 +101,15 @@ up:
 
 ```bash
 remote-claude health                      # is it there?
-remote-claude health --auth               # can it authenticate to Claude?
+remote-claude health --auth               # can it authenticate, and with which credential?
 remote-claude "add a test for parseDiff"  # start a job and follow it
+```
+
+Pick a model per job when it matters — cheap work on a small one, hard work on a
+large one. Left out, a job runs whatever the deployment is configured with:
+
+```bash
+remote-claude --model haiku "bump the version in package.json and the lockfile"
 ```
 
 Read what happened, and take the change:

@@ -119,7 +119,15 @@ export class AgentSessionService {
 
       const buffer = new NdjsonBuffer();
       const resume = session.load().claudeSessionId ?? null;
-      const command = buildClaudeCommand(text, resume);
+      const command = buildClaudeCommand({
+        prompt: text,
+        resumeId: resume,
+        scheme: policy.claudeAuthScheme,
+        // The deployment's model. A session cannot choose its own: ACP has no
+        // field for one, and switching mid-conversation is not a thing a turn
+        // should be able to do silently.
+        model: policy.model,
+      });
 
       const exec = sandbox.exec(command, {
         cwd: REPO_DIR,
