@@ -16,6 +16,7 @@
  * token is passed per call or held by one gateway object, never in module state.
  */
 
+import { followOutput, type FollowOptions } from './application/follow-output.js';
 import { waitForJob, type WaitOptions } from './application/wait-for-job.js';
 import type { AuthProbe, SandboxLedger } from './domain/executor.js';
 import type { ContinueJob, JobRecord, JobSummary, LogPage, StartJob } from './domain/job.js';
@@ -27,6 +28,7 @@ export { normaliseUrl } from './domain/endpoint.js';
 export { ExecutorError } from './infrastructure/errors.js';
 export { HttpJobGateway, type ExecutorConfig, type HttpJobGatewayOptions } from './infrastructure/http-gateway.js';
 export { waitForJob, type WaitOptions } from './application/wait-for-job.js';
+export { followOutput, type FollowOptions } from './application/follow-output.js';
 export type { JobGateway, Sleep } from './application/ports.js';
 
 /**
@@ -52,6 +54,15 @@ export function createClient(config: ExecutorConfig) {
     listSandboxes: () => gateway.sandboxes(),
     /** Poll until the job finishes. Resolves on failure too — read `status`. */
     waitForJob: (jobId: string, options?: WaitOptions) => waitForJob(gateway, jobId, options),
+    /**
+     * Follow what the job's commands print, as they print it.
+     *
+     * The other half of watching a run: `waitForJob`'s `onLog` gives parsed lines
+     * and answers where a run is up to; this gives the bytes and answers what is
+     * happening.
+     */
+    followOutput: (jobId: string, options?: FollowOptions) =>
+      followOutput(config, jobId, options),
   };
 }
 

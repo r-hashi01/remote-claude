@@ -22,6 +22,7 @@
  * Contract with the Worker — everything under $STATE_DIR:
  *   job.json      input, written by the Worker before this starts
  *   log.ndjson    append-only; one JSON object per line
+ *   output.raw    append-only; what a terminal attached to this would have shown
  *   status.json   current phase; rewritten as it changes
  *   result.json   written once, on completion
  *   patch.diff    written once, on completion
@@ -74,10 +75,49 @@ function write(name, data) {
   writeFileSync(path, typeof data === 'string' ? data : JSON.stringify(data));
 }
 
+/**
+ * What a terminal attached to this pipeline would have shown.
+ *
+ * Written beside log.ndjson rather than instead of it, because the two answer
+ * different questions: the NDJSON says *where a run is up to* — one object per
+ * line, with the step markers and the stream it came from — and this says *what
+ * is happening*, in the bytes the commands actually produced, unsplit and
+ * untruncated.
+ *
+ * Watching a run is the case that has no answer today. A run that spent twenty
+ * minutes looping, one that died at install with ECONNRESET, one that went quiet
+ * for four minutes: each was legible only from the output, and only after the
+ * fact.
+ *
+ * Bounded, and it says so when it stops. An unbounded file here is a job's memory
+ * consumption decided by how chatty its build is.
+ */
+const MAX_RAW_BYTES = 8_000_000;
+let rawBytes = 0;
+let rawStopped = false;
+
+function raw(text) {
+  if (rawStopped) return;
+  const clean = redact(text);
+  if (rawBytes + clean.length > MAX_RAW_BYTES) {
+    rawStopped = true;
+    appendFileSync(
+      `${STATE_DIR}/output.raw`,
+      `\n[output stopped after ${MAX_RAW_BYTES} bytes; the steps and their exit codes are still recorded]\n`
+    );
+    return;
+  }
+  rawBytes += clean.length;
+  appendFileSync(`${STATE_DIR}/output.raw`, clean);
+}
+
 let logSeq = 0;
 function log(stream, line) {
   const clean = redact(line);
   if (!clean.trim()) return;
+  // Markers belong in the terminal view too: they are how a watcher knows which
+  // step the output underneath belongs to.
+  if (stream === 'system') raw(`${clean}\n`);
   logSeq += 1;
   appendFileSync(
     `${STATE_DIR}/log.ndjson`,
@@ -174,7 +214,10 @@ heartbeat.unref();
  * agreement for no benefit. This side emits facts; the other side decides what
  * they mean.
  */
+let agentEvents = 0;
+
 function emitAgentEvent(line) {
+  agentEvents += 1;
   logSeq += 1;
   appendFileSync(
     `${STATE_DIR}/log.ndjson`,
@@ -241,6 +284,14 @@ function run(name, command, options = {}) {
       lastOutputAt = Date.now();
       const text = chunk.toString();
       output += text;
+      // Before anything is decided about it: no line splitting, no truncation.
+      //
+      // Except the agent's own event stream, which is JSON on stdout and belongs
+      // to the parsed view — the Worker turns it into readable lines there. Thirty
+      // kilobytes of it went past in a two-second local run; a terminal fed that
+      // answers "what is happening" worse than the translated lines do, and costs
+      // more to carry. Liveness for that step is the notice below instead.
+      if (!(options.onLine && stream === 'stdout')) raw(text);
 
       // Only stdout carries the agent's event stream. stderr is warnings and
       // diagnostics — routing it through the same path made non-JSON lines look
@@ -268,7 +319,12 @@ function run(name, command, options = {}) {
     const silenceNotice = setInterval(() => {
       if (Date.now() - lastOutputAt < STEP_SILENCE_NOTICE_MS) return;
       lastOutputAt = Date.now();
-      log('system', `⋯ ${name} still running (${Math.round((Date.now() - startedAt) / 1000)}s, no output yet)`);
+      const seconds = Math.round((Date.now() - startedAt) / 1000);
+      // A step whose output is the agent's event stream is never silent to this
+      // side and always silent to a terminal, so say what it has done rather than
+      // that it has done nothing. A count is not an interpretation.
+      const doing = options.onLine ? `${agentEvents} agent events` : 'no output yet';
+      log('system', `⋯ ${name} still running (${seconds}s, ${doing})`);
     }, 15_000);
     silenceNotice.unref();
 

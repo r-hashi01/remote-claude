@@ -17,6 +17,7 @@ import type {
   PullRequestRequest,
   WorkspaceRef,
 } from '../domain/job/record';
+import { redactWindow } from '../domain/redaction/window';
 import { composePullRequest } from '../domain/job/pull-request';
 import { resolveRepository } from '../domain/job/repository';
 import {
@@ -268,6 +269,52 @@ export class JobService {
     this.deps.logs.flush(job.id);
     await scheduler.scheduleIn(0);
     return job;
+  }
+
+  /**
+   * A window of what this job's commands have printed, as they printed it.
+   *
+   * The other half of following a run. `getLogs` answers where a run is up to —
+   * one object per line, with the step markers and which stream it came from —
+   * and this answers what is happening: the bytes, unsplit and untruncated, in
+   * the order a terminal would have shown them.
+   *
+   * Offsets are bytes of the file, and the one returned is **what the caller has
+   * been shown** rather than what was read: the tail is withheld while more can
+   * arrive, so that a secret falling across the end of a window is masked on the
+   * read that completes it rather than half-sent on this one.
+   *
+   * Only while the sandbox is there. A job whose container has gone answers with
+   * what it has, which is nothing — the parsed log outlives it, and this does not.
+   */
+  async readOutput(
+    jobId: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ text: string; nextOffset: number; size: number; done: boolean }> {
+    const { jobs, sandboxes, redact } = this.deps;
+
+    const job = jobs.load(jobId);
+    if (!job) throw new NotFound(`job ${jobId} is not one this executor knows about`);
+
+    // Terminal means no more bytes will appear, which is what makes the tail safe
+    // to release. It does not mean the sandbox is still there to read.
+    const done = job.isTerminal;
+
+    let chunk = '';
+    let size = 0;
+    try {
+      const sandbox = await sandboxes.create(sandboxIdForJob(jobId));
+      const window = await sandbox.readWindow(`${STATE_DIR}/output.raw`, offset, limit);
+      chunk = window.chunk;
+      size = window.size;
+    } catch {
+      // A sandbox that has been reclaimed is not an error to a follower; it is the
+      // end of the thing they were following.
+    }
+
+    const window = redactWindow(chunk, { redact, final: done, offset });
+    return { ...window, size, done };
   }
 
   async cancelJob(id: string): Promise<Job | null> {

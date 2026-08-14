@@ -3,6 +3,7 @@ import { Refusal } from '../../domain/job/errors';
 import type { ContinueRequest } from '../../application/job-service';
 import type { JobRequest } from '../../domain/job/record';
 import type { Env } from '../../infrastructure/env';
+import { streamOutput } from './output-stream';
 import { authorize } from './auth';
 
 /**
@@ -122,7 +123,10 @@ export async function route(request: Request, env: Env, deps: RouteDeps): Promis
     }
   }
 
-  const match = /^\/jobs\/([A-Za-z0-9-]+)(\/logs|\/diff|\/cancel|\/continue)?$/.exec(path);
+  const match =
+    /^\/jobs\/([A-Za-z0-9-]+)(\/logs|\/diff|\/cancel|\/continue|\/output|\/output\/stream)?$/.exec(
+      path,
+    );
   if (match) {
     const [, id, suffix] = match;
     const jobId = id as string;
@@ -140,6 +144,34 @@ export async function route(request: Request, env: Env, deps: RouteDeps): Promis
         return new Response(text, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
       }
       return Response.json({ logs: lines, nextSince: lines.at(-1)?.seq ?? since });
+    }
+
+    // What the commands printed, as they printed it. The parsed log says where a
+    // run is up to; this says what is happening (ADR 0012).
+    if (suffix === '/output' && method === 'GET') {
+      const offset = Number.parseInt(url.searchParams.get('offset') ?? '0', 10) || 0;
+      const limit = Math.min(
+        Number.parseInt(url.searchParams.get('limit') ?? '65536', 10) || 65_536,
+        1_000_000,
+      );
+      return Response.json(await jobs.readOutput(jobId, offset, limit));
+    }
+
+    if (suffix === '/output/stream' && method === 'GET') {
+      const raw = url.searchParams.get('offset');
+      return streamOutput(
+        {
+          readOutput: (id, offset, limit) => jobs.readOutput(id, offset, limit),
+          status: async (id) => (await jobs.getJob(id))?.status ?? null,
+        },
+        jobId,
+        {
+          // Absent means "wherever a late reader should start"; the stream decides
+          // that and says so, rather than this deciding it twice.
+          ...(raw === null ? {} : { offset: Number.parseInt(raw, 10) || 0 }),
+          signal: request.signal,
+        },
+      );
     }
 
     if (suffix === '/diff' && method === 'GET') {
