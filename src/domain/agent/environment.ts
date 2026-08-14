@@ -1,8 +1,8 @@
 import { PROXY_SENTINEL, type ClaudeAuthScheme } from './credential';
 
 /**
- * Environment for the `claude` process, wherever it runs (job pipeline,
- * interactive ACP session, health probe).
+ * Environment for the `claude` process, wherever it runs (the job pipeline, the
+ * health probe).
  *
  * `undefined` unsets the variable rather than passing an empty string — that's
  * the Sandbox exec contract. Exactly one credential variable is ever set, and

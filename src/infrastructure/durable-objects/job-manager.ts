@@ -110,8 +110,8 @@ export class JobManager extends DurableObject<Env> {
   /**
    * The same list, without each job's captured step output.
    *
-   * The dashboard polls this every few seconds. Whole records once shipped over
-   * a megabyte per refresh to render a status and a prompt.
+   * What a list view polls. Whole records once shipped over a megabyte per
+   * refresh to render a status and a prompt.
    */
   async listJobSummaries(limit = 20): Promise<JobSummary[]> {
     return this.service.listJobSummaries(limit);

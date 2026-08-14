@@ -1,64 +1,22 @@
 /**
- * Agent Client Protocol (ACP) v1 — types and the Claude Code translation layer.
+ * Claude Code's event stream, translated into something a person can read.
  *
- * Scope note: ACP v1 (`protocolVersion: 1`) is the stable surface. v2 exists but
- * is a draft that upstream explicitly says not to ship by default, and the
- * remote HTTP/WebSocket transport is still only an RFD proposal. So this file
- * models v1, and the remote hop is our own SSE channel (see agent-session.ts)
- * with a local stdio bridge presenting real ACP to the editor.
+ * The vocabulary is the Agent Client Protocol's `session/update` — `tool_call`,
+ * `agent_message_chunk`, `plan` — because that is a described set of shapes for
+ * exactly this, and inventing another one to say the same things would be work
+ * with nothing at the end of it.
  *
- * Conventions from the spec that are easy to get wrong:
+ * The protocol *surface* is gone (ADR 0015): there is no session endpoint, no
+ * JSON-RPC, and no stdio bridge, so the transport helpers that existed only for
+ * those went with them. What is left is the part the job pipeline uses — the
+ * translation from `stream-json` events to updates, and from updates to the lines
+ * a log shows.
+ *
+ * Conventions kept from the spec, because they are easy to get wrong and the
+ * shapes are still its shapes:
  *   - JSON keys are camelCase; discriminator *values* are snake_case.
  *   - All paths are absolute, line numbers are 1-based.
- *   - `session/update` is a NOTIFICATION — never reply to it.
  */
-
-export const ACP_PROTOCOL_VERSION = 1;
-
-// ---------------------------------------------------------------- JSON-RPC
-
-export interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id: string | number;
-  method: string;
-  params?: unknown;
-}
-
-export interface JsonRpcNotification {
-  jsonrpc: '2.0';
-  method: string;
-  params?: unknown;
-}
-
-export interface JsonRpcResponse {
-  jsonrpc: '2.0';
-  id: string | number | null;
-  result?: unknown;
-  error?: { code: number; message: string; data?: unknown };
-}
-
-export const JSON_RPC = {
-  parseError: -32700,
-  invalidRequest: -32600,
-  methodNotFound: -32601,
-  invalidParams: -32602,
-  internalError: -32603,
-  requestCancelled: -32800,
-  authRequired: -32000,
-  resourceNotFound: -32002,
-} as const;
-
-export function rpcResult(id: string | number, result: unknown): JsonRpcResponse {
-  return { jsonrpc: '2.0', id, result };
-}
-
-export function rpcError(id: string | number | null, code: number, message: string): JsonRpcResponse {
-  return { jsonrpc: '2.0', id, error: { code, message } };
-}
-
-export function rpcNotify(method: string, params: unknown): JsonRpcNotification {
-  return { jsonrpc: '2.0', method, params };
-}
 
 // ------------------------------------------------------------ ACP payloads
 

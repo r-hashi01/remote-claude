@@ -57,8 +57,9 @@ npm run sdk:typecheck
 
 ## 触ってはいけないもの
 
-- **Durable Object のクラス名**（`JobManager` / `AgentSession` / `Sandbox`）。
-  `wrangler.jsonc` の migrations がクラス名で紐づいており、改名は storage を失う
+- **Durable Object のクラス名**（`JobManager` / `Sandbox`）。
+  `wrangler.jsonc` の migrations がクラス名で紐づいており、改名は storage を失う。
+  `AgentSession` は v4 で削除済み（ADR 0015）— 名前は migrations の履歴に残る
 - **`container/runner.mjs` と `job.json` の契約**。片方だけ変えるとコンテナと
   Worker が食い違う。ADR 0007 の失敗はこれ
 - **credential をコンテナに渡す形**。実 token は Worker の outbound handler で注入する。

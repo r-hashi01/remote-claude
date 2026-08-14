@@ -850,8 +850,8 @@ export class JobService {
         highest = Math.max(highest, entry.seq);
 
         if (entry.stream === 'agent') {
-          // Raw agent events, interpreted by the same translator the ACP surface
-          // uses. The container emits facts; meaning is assigned once.
+          // Raw agent events, interpreted here rather than in the container. It
+          // emits facts; meaning is assigned once, on this side.
           const translated = translateEvent(
             JSON.parse(entry.line) as ClaudeStreamEvent,
           );

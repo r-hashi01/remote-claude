@@ -1,4 +1,3 @@
-import type { AgentSession } from './durable-objects/agent-session';
 import type { JobManager } from './durable-objects/job-manager';
 import type { Sandbox } from './durable-objects/sandbox';
 
@@ -44,8 +43,6 @@ export interface Env extends Secrets {
   // --- Durable Object / container bindings ---
   Sandbox: DurableObjectNamespace<Sandbox>;
   JOBS: DurableObjectNamespace<JobManager>;
-  /** One Durable Object per interactive ACP session. */
-  ACP: DurableObjectNamespace<AgentSession>;
 
   /** Job artifacts: patch and result bodies. */
   ARTIFACTS: R2Bucket;

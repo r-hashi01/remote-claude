@@ -208,11 +208,10 @@ heartbeat.unref();
 /**
  * Record one raw agent event.
  *
- * Deliberately not interpreted here. Turning these into something a human
- * reads is the Worker's job, which already owns that translator and uses it for
- * the ACP surface too — writing a second one here meant two things to keep in
- * agreement for no benefit. This side emits facts; the other side decides what
- * they mean.
+ * Deliberately not interpreted here. Turning these into something a human reads
+ * is the Worker's job, which owns that translator — writing a second one here
+ * would mean two things to keep in agreement for no benefit. This side emits
+ * facts; the other side decides what they mean.
  */
 let agentEvents = 0;
 
