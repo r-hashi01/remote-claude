@@ -44,6 +44,40 @@ A failed job still carries `result.steps` — the commands the executor ran and
 what each printed — which is usually what a reader wants from a failure. The
 reason it failed is on `error`, not inside `result`.
 
+## Watching it happen
+
+Two views, and they answer different questions. `waitForJob`'s `onLog` gives
+parsed lines — the step markers, and which stream each came from — and answers
+**where a run is up to**. `followOutput` gives the bytes the commands produced,
+unsplit and untruncated, and answers **what is happening**.
+
+```ts
+const outcome = await rc.followOutput(job.id, {
+  onChunk: (text, offset) => process.stdout.write(text),
+  onStart: (offset, skipped) =>
+    skipped > 0 && console.error(`joined late; ${skipped} bytes skipped`),
+  onIdle: () => {},           // nothing new; the stream is alive, not wedged
+});
+
+console.error(`job ${outcome.status}`);
+```
+
+Over SSE, resumable, and readable by several viewers at once. Three things worth
+knowing before you build on it:
+
+- **The offset is what you were shown**, not what the executor read. A tail is
+  withheld while more can arrive, so a credential falling across the end of a
+  window is masked on the read that completes it rather than half-sent. Resume
+  from the offset in the last chunk, never from a count of your own.
+- **It ends by saying so.** `followOutput` resolves with the job's status, which
+  is how a finished run is distinguishable from a dropped connection.
+- **It lives as long as the container.** The parsed log outlives the job; this
+  does not. And there is no ANSI in it: commands run without a TTY, so tools
+  print no colour and redraw nothing.
+
+There is no input channel, and there will not be one. What you want to change,
+say in the conversation and continue the job.
+
 ## Another repository
 
 A deployment has one configured repository and will run against others when it
@@ -80,6 +114,7 @@ await rc.listJobs(1); // /health is unauthenticated, so this is what proves the 
 | `continueJob(id, input)` | A follow-up turn on a finished job: same branch, same conversation |
 | `cancelJob(id)` | Ask the executor to stop |
 | `waitForJob(id, opts?)` | Poll until it finishes |
+| `followOutput(id, opts?)` | Follow what the commands print, as they print it |
 | `checkAuth()` | Whether Claude Code on that deployment can authenticate |
 | `listSandboxes()` | What it has allocated and whether it got it back |
 
