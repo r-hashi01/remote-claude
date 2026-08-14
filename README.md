@@ -17,6 +17,17 @@ remote-claude "Investigate the 500 on login and fix it"
 > ([ADR 0003](docs/adr/0003-separate-execution-from-product.md)). The product
 > built on this one is [spindle](https://github.com/r-hashi01/spindle).
 
+> **One person's deployment.** The container signs in as *you*: your Claude
+> subscription, over OAuth. Anthropic's
+> [consumer terms](https://www.anthropic.com/legal/consumer-terms) say you "may
+> not share your Account login information, Anthropic API key, or Account
+> credentials with anyone else" and "may not make your Account available to
+> anyone else" — and a deployment that runs other people's prompts on your
+> credential is doing the second one, whether or not anybody ever sees the token.
+> Standing this up as a shared service for a team is not a feature this project
+> has yet to add. It is the thing the bearer token and Cloudflare Access are
+> there to prevent. [Security](docs/operating.md#security).
+
 ## Documentation
 
 | | |
@@ -24,6 +35,7 @@ remote-claude "Investigate the 500 on login and fix it"
 | **[Using it](docs/usage.md)** | Submitting jobs, every option, reading results, pull requests, interactive sessions, and what each failure means |
 | **[Operating it](docs/operating.md)** | Prerequisites, secrets, the GitHub App, deploying, configuration, security, cost |
 | [SDK](sdk/README.md) | The typed client: `npm i @r-hashi01/remote-claude-client` |
+| [Security](SECURITY.md) | The threat model, what to report and where, and what is a decision rather than a bug |
 | [Decisions](docs/adr/) | Why it is built this way, including the corrections (Japanese) |
 | [Roadmap](docs/roadmap.md) | What is known to be missing, from observed failures (Japanese) |
 
