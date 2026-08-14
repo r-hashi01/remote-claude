@@ -397,6 +397,19 @@ spindle は 0.2.0 に上げ済み。
 `sdk/` は1行も動いていない。番号だけを上げた publish なので、
 0.2.0 の利用者が 0.3.0 に上げて得るものは無い。
 
+**0.3.1 は spindle からの問いへの回答。** 聞かれたのは
+「`getDiff` が返すのは前ターンからの増分か、分岐点からの累積か」。
+答えは累積で、`container/runner.mjs` は継続かどうかに関わらず
+`git diff <baseBranch>..HEAD` を1箇所で作っている。問題は答えの中身ではなく、
+**それがコードにしか無かったこと** — `getDiff` の doc comment は
+「The patch, or null while there is not one」だけだった。
+型で表せない契約は書くしかない。`ports.ts` / `index.ts` / `JobResult.diffStat` に書いた。
+
+ついでに、答えるまで気づいていなかった性質が1つある。range は2ドットで、左辺は
+**サンドボックスが clone した時点の base branch** を指す。継続は再 clone せず workspace を
+復元するので、この ref はターンをまたいでも進まない。ターン間に本物の base branch へ
+入ったコミットは diff に現れない。利用者が「現在の main との差分」を期待すると食い違う。
+
 publish は 2FA が要るので人手。詰まった点を1つ残す:
 **未認証の publish は 404 で返る**（既存パッケージの存在を漏らさないため）。
 `npm error 404 ... could not be found or you do not have permission` は

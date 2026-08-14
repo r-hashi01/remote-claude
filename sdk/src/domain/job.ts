@@ -62,6 +62,7 @@ export interface JobResult {
   branch: string;
   pushed: boolean;
   gitStatus: string;
+  /** The `--stat` of the same range `getDiff` returns: the branch, not the turn. */
   diffStat: string;
   /** Byte length of the stored patch. Fetch the patch itself with `getDiff`. */
   diffBytes: number;
