@@ -413,3 +413,64 @@ describe('the runner and the Worker agree on job.json', () => {
     expect([...new Set(read_)].filter((field) => !keys.has(field))).toEqual([]);
   });
 });
+
+/**
+ * The executor is the deployer's own tool, and nothing a caller sends can change
+ * whose it is.
+ *
+ * Where the credential is kept is a question this deployment may yet answer
+ * differently — today it is a Worker secret. Where it may *not* come from is
+ * settled: a request. No field on anything a caller sends may carry one, because
+ * the moment one does, a deployment stops being a person running Claude Code on
+ * a machine they rented and becomes a service holding other people's
+ * credentials — the arrangement Claude Code's terms name and refuse ("route
+ * requests through Free, Pro, or Max plan credentials on behalf of their users",
+ * https://code.claude.com/docs/en/legal-and-compliance).
+ *
+ * That property is currently true because nobody has added the field. This makes
+ * it true because adding it fails. The idea that arrives as "it would be
+ * convenient to accept a per-user token" is a reasonable-sounding one, which is
+ * why it wants a test in its way rather than a paragraph somewhere.
+ */
+describe('nothing a caller sends can carry a credential', () => {
+  const requestTypes = [
+    ['src/domain/job/record.ts', 'JobRequest'],
+    ['src/application/job-service.ts', 'ContinueRequest'],
+    ['src/domain/job/pull-request.ts', 'PullRequestRequest'],
+  ] as const;
+
+  // Names a credential would plausibly arrive under. Not an exhaustive list of
+  // secrets — an exhaustive list of what somebody would call one in a hurry.
+  const credentialish = /token|credential|secret|password|apikey|api_key|oauth|bearer|auth/i;
+
+  test.each(requestTypes)('%s: %s has no credential-shaped field', (path, name) => {
+    const body = new RegExp(`export interface ${name} \\{([\\s\\S]*?)\\n\\}`).exec(read(path));
+    expect(body, `no ${name} in ${path}`).not.toBeNull();
+
+    const fields = [
+      ...withoutComments(body?.[1] ?? '').matchAll(/^\s{2}([a-zA-Z_]+)\??:/gm),
+    ].map((match) => match[1] as string);
+    expect(fields.length, `no fields found on ${name}`).toBeGreaterThan(0);
+
+    expect(fields.filter((field) => credentialish.test(field))).toEqual([]);
+  });
+
+  test('the layer that reads requests never names the credential', () => {
+    // `src/interface/**` is where a caller's bytes become a call. Naming the
+    // credential there is how a request would come to influence which one is
+    // used — so nothing there may.
+    //
+    // Not `src/domain/**`: `domain/agent/environment.ts` names the variable
+    // because deciding what reaches the container is a rule, and it is the rule
+    // ADR 0002 is about. It chooses between a placeholder and a value handed to
+    // it; it has no way to obtain one.
+    //
+    // Not `src/infrastructure/**`: reading it from `Env` is the intended path,
+    // and the only one.
+    const offenders = sources
+      .filter((path) => path.startsWith('src/interface/'))
+      .filter((path) => withoutComments(read(path)).includes('CLAUDE_CODE_OAUTH_TOKEN'));
+
+    expect(offenders).toEqual([]);
+  });
+});

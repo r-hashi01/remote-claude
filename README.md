@@ -17,20 +17,25 @@ remote-claude "Investigate the 500 on login and fix it"
 > ([ADR 0003](docs/adr/0003-separate-execution-from-product.md)). The product
 > built on this one is [spindle](https://github.com/r-hashi01/spindle).
 
-> **One person's deployment.** The container signs in as *you*: your Claude
-> subscription, over OAuth. Anthropic's
-> [consumer terms](https://www.anthropic.com/legal/consumer-terms) say you "may
-> not share your Account login information, Anthropic API key, or Account
-> credentials with anyone else" and "may not make your Account available to
-> anyone else" — and a deployment that runs other people's prompts on your
-> credential is doing the second one, whether or not anybody ever sees the token.
-> Standing this up as a shared service for a team is not a feature this project
-> has yet to add: there is no notion of a user anywhere in it — no accounts, no
-> seats, no per-person tokens, nothing that attributes a job to whoever asked for
-> it. Which is also the reason to say this out loud. Nothing in the software
-> enforces it. One bearer token is the whole gate, and handing that string to ten
-> people is something no part of the system would notice or object to.
-> [Security](docs/operating.md#security).
+> **You deploy it, and it works for you.** Claude Code signs in with a
+> subscription, and Anthropic's
+> [terms for Claude Code](https://code.claude.com/docs/en/legal-and-compliance)
+> say OAuth "is intended exclusively for purchasers of Claude Free, Pro, Max,
+> Team, and Enterprise subscription plans", while Anthropic "does not permit
+> third-party developers to offer Claude.ai login or to route requests through
+> Free, Pro, or Max plan credentials on behalf of their users."
+>
+> The line is not about where the container runs — deploying this to your own
+> Cloudflare account is no different from renting a VM and running Claude Code on
+> it. The line is whether a product stands between somebody and their own
+> credential. So: deploy your own, use it yourself. Do not run one and let other
+> people send prompts to it; if you are building something for other people, that
+> is what [API keys and the commercial terms](https://platform.claude.com/) are
+> for, and the flat-subscription economics below do not survive the move.
+>
+> The API cannot be handed a credential — no request type has a field for one, and
+> [a test](src/conventions.test.ts) fails if somebody adds one. Everything else
+> here is a decision you have to keep making. [Security](SECURITY.md).
 
 ## Documentation
 

@@ -318,7 +318,7 @@ Beyond the $5/month plan:
 | Durable Objects | Requests and SQLite | Jobs pruned after 7 days, logs capped at 20,000 lines |
 | Worker requests | Including polling | Follow polls between 0.4s and 1.5s |
 | R2 | Storage and operations | Artifacts only; the cache is off |
-| **Anthropic** | **Nothing.** The subscription is flat, and no API key is used | |
+| **Anthropic** | **Nothing.** The subscription is flat, and no API key is used | One person's arithmetic. It does not extend: serving other people means API keys and per-token billing ([terms](https://code.claude.com/docs/en/legal-and-compliance)) |
 
 The first three settings to reach for: `MAX_CONCURRENCY: "1"`,
 `SANDBOX_SLEEP_AFTER: "2m"`, and leaving `instance_type` alone.
