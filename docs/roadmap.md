@@ -410,6 +410,33 @@ spindle は 0.2.0 に上げ済み。
 復元するので、この ref はターンをまたいでも進まない。ターン間に本物の base branch へ
 入ったコミットは diff に現れない。利用者が「現在の main との差分」を期待すると食い違う。
 
+**0.3.3 以降は CI から publish する。** 0.1.0〜0.3.2 は手元からの publish で、
+個人マシンのトークン・リリース途中の 2FA プロンプト・出所を示すものが registry に
+何も残らない状態、の3つが付いてきた。`publish.yml` が OIDC で npm に信頼されるので
+トークンは存在しなくなり、公開物には provenance が付く。
+
+リリース手順:
+
+```bash
+# sdk/package.json を上げて PR → main
+git tag client-v0.3.3 && git push origin client-v0.3.3
+```
+
+タグと `sdk/package.json` が食い違っていたらワークフローがビルド前に落とす。
+**npm 側の trusted publisher はワークフローの*ファイル名*で照合される。**
+`publish.yml` を改名したら npmjs.com の設定も変えること。
+
+### main を保護した
+
+publish が GitHub 側に移ったので、`main` に入るものがそのまま publish されうる。
+PR 必須（承認は0件でよい）・force push 禁止・削除禁止・linear history・管理者にも適用。
+必須チェックは `ci.yml` の `check`。
+
+`ci.yml` を足したのは、それまで typecheck と test が **push to main の deploy ジョブでしか
+走っていなかった**から。赤い suite はデプロイが失敗するのを見て気づくもので、
+そのときにはもう publish されるブランチの上に乗っている。deploy 側の同じ検査は残してある。
+デプロイされるものは、別のツリーで通った検査を根拠にせず、デプロイされるときに検査する。
+
 publish は 2FA が要るので人手。詰まった点を1つ残す:
 **未認証の publish は 404 で返る**（既存パッケージの存在を漏らさないため）。
 `npm error 404 ... could not be found or you do not have permission` は

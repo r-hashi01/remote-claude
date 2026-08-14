@@ -1,0 +1,61 @@
+name: CI
+
+# The same checks `deploy.yml` runs, moved to where they can still stop something.
+#
+# Until this existed, typecheck and tests ran only on push to main — after the
+# merge, in the job that deploys. A red suite was discovered by watching a
+# deployment fail, and by then the commit was already on the branch that
+# publishes. This is the copy that runs while a pull request is still a pull
+# request, so it can be required rather than merely observed.
+#
+# Deploy keeps its own copy deliberately: what is deployed should be verified as
+# it is deployed, not on the strength of a check that passed on a different tree.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      # A separate package with its own lockfile, so it needs its own install.
+      - name: Install SDK dependencies
+        run: npm --prefix sdk install --no-audit --no-fund
+
+      - name: Typecheck
+        run: |
+          npx wrangler types
+          npm run typecheck
+          npm run sdk:typecheck
+
+      - name: Test
+        run: npm test
+
+      # The properties that only exist inside workerd — they need a runtime
+      # rather than fakes.
+      - name: Test inside workerd
+        run: npm run test:workers
+
+      # The SDK is what this repository publishes. A client that no longer
+      # compiles against the API is a broken release, and this is the last place
+      # that is still cheap to find out.
+      - name: Build SDK
+        run: npm run sdk:build

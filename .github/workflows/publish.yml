@@ -1,0 +1,84 @@
+name: Publish
+
+# Publishes `@r-hashi01/remote-claude-client` from CI rather than from a laptop.
+#
+# The three releases before this one went out by hand, which meant a token on a
+# personal machine, a 2FA prompt in the middle of the release, and nothing in the
+# registry saying where the tarball came from. Publishing here replaces all three:
+# npm trusts this workflow through OIDC (`id-token: write`), so there is no token
+# to hold, and the published version carries provenance a consumer can verify.
+#
+# **npm side.** This requires a trusted publisher configured on npmjs.com for the
+# package, pointing at this repository and at this file *by name*. The match is on
+# the filename — renaming this file breaks publishing until the setting is changed
+# to match.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'client-v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # What npm exchanges for the right to publish. Without it the publish step
+      # falls back to looking for a token, finds none, and fails.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing landed in npm 11.5.1, and the npm bundled with Node 22
+      # is older than that. Without this the publish fails asking for credentials
+      # that this workflow deliberately does not have.
+      - name: Use an npm that can publish without a token
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install SDK dependencies
+        run: npm --prefix sdk install --no-audit --no-fund
+
+      # A tag that disagrees with the manifest is the one mistake this workflow
+      # can catch and no reviewer reliably does. Checked before anything is built,
+      # so it fails on the cheap side.
+      - name: Check the tag against the manifest
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tagged="${GITHUB_REF_NAME#client-v}"
+          manifest="$(node -p "require('./sdk/package.json').version")"
+          if [ "$tagged" != "$manifest" ]; then
+            echo "tag ${GITHUB_REF_NAME} says ${tagged}, sdk/package.json says ${manifest}" >&2
+            exit 1
+          fi
+          echo "publishing ${manifest}"
+
+      - name: Typecheck
+        run: |
+          npx wrangler types
+          npm run typecheck
+          npm run sdk:typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Test inside workerd
+        run: npm run test:workers
+
+      # `prepublishOnly` builds again on the way out. Building here as well is
+      # what makes a build failure a failed job rather than a failed publish.
+      - name: Build SDK
+        run: npm run sdk:build
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        working-directory: sdk
