@@ -29,7 +29,7 @@ job settles:
 | Step | What it is |
 | --- | --- |
 | clone | Done by the Worker, because it needs a credential the container must never see |
-| `verify-no-api-key` | Refuses to run if an Anthropic API key is present. This environment is subscription-only |
+| `verify-environment` | Refuses to run unless the container is as promised: no Anthropic API key (this environment is subscription-only) and no GitHub credential (the Worker attaches that outside the container) |
 | `git-branch` | `claude/<job-id>`, cut from the base branch. `main` is never touched |
 | `install` | Your install command. **Runs even with `skipChecks`** |
 | `claude-code` | The agent, non-interactive, with permissions bypassed |
