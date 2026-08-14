@@ -27,13 +27,35 @@ export function redactWindow(
 ): { text: string; nextOffset: number } {
   if (chunk === '') return { text: '', nextOffset: offset };
 
-  const clean = redact(chunk);
-  if (final) return { text: clean, nextOffset: offset + chunk.length };
+  if (final) return { text: redact(chunk), nextOffset: offset + byteLength(chunk) };
 
-  // Withheld against the raw length, not the redacted one: the offset counts
-  // bytes of the file, and masking changes the text's length but not the file's.
-  if (chunk.length <= HOLD_BACK_BYTES) return { text: '', nextOffset: offset };
+  // Withheld against what was read, not what will be shown: masking changes the
+  // text's length and cannot change the file's.
+  const shown = withoutTail(chunk);
+  if (shown === '') return { text: '', nextOffset: offset };
 
-  const emitted = redact(chunk.slice(0, -HOLD_BACK_BYTES));
-  return { text: emitted, nextOffset: offset + chunk.length - HOLD_BACK_BYTES };
+  return { text: redact(shown), nextOffset: offset + byteLength(shown) };
+}
+
+/**
+ * Bytes, because that is what an offset into a file counts.
+ *
+ * The distinction is not pedantic: it cost a duplicated credential-shaped line in
+ * the first run ever watched. `▶`, `✔` and `—` are one character and three bytes
+ * each, so a window's length in characters ran behind its length in bytes, the
+ * next read began inside what had already been sent, and the overlap arrived as
+ * text repeated mid-word.
+ */
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/** Everything except the last HOLD_BACK_BYTES bytes, cut on a character. */
+function withoutTail(chunk: string): string {
+  let kept = chunk.length;
+  // Walk back by characters until the withheld part is at least the hold-back, so
+  // the cut never falls inside one — a half-character would arrive as a
+  // replacement glyph and the offset would still have to skip its other bytes.
+  while (kept > 0 && byteLength(chunk.slice(kept)) < HOLD_BACK_BYTES) kept -= 1;
+  return chunk.slice(0, kept);
 }

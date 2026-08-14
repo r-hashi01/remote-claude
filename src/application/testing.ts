@@ -387,13 +387,24 @@ export class FakeSandbox implements SandboxSession {
     return this.files.get(path) ?? null;
   }
 
+  /**
+   * Bytes, like `tail -c` and `wc -c`, which is what the real one is built from.
+   *
+   * Sliced by character first, and that difference was invisible here while being
+   * a defect there: a window ending after `▶` reported an offset two short, and
+   * the next read repeated what had already been shown. A fake that measures
+   * differently from the thing it stands in for cannot fail for that.
+   */
   async readWindow(
     path: string,
     offset: number,
     limit: number
   ): Promise<{ chunk: string; size: number }> {
-    const body = this.files.get(path) ?? '';
-    return { chunk: body.slice(offset, offset + limit), size: body.length };
+    const bytes = new TextEncoder().encode(this.files.get(path) ?? '');
+    return {
+      chunk: new TextDecoder().decode(bytes.slice(offset, offset + limit)),
+      size: bytes.length,
+    };
   }
 
   /** Processes the platform is holding, by the id the caller chose. */
