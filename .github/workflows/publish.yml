@@ -8,10 +8,21 @@ name: Publish
 # npm trusts this workflow through OIDC (`id-token: write`), so there is no token
 # to hold, and the published version carries provenance a consumer can verify.
 #
-# **npm side.** This requires a trusted publisher configured on npmjs.com for the
-# package, pointing at this repository and at this file *by name*. The match is on
-# the filename — renaming this file breaks publishing until the setting is changed
-# to match.
+# **npm side.** One of two things has to be configured there, and neither can be
+# done from this repository:
+#
+#   1. A trusted publisher on npmjs.com for the package, pointing at this
+#      repository and at this file *by name*. The match is on the filename, so
+#      renaming this file breaks publishing until the setting is changed to match.
+#      Preferred: no secret exists to leak, and npm is restricting the tokens that
+#      bypass 2FA for direct publishing.
+#   2. Failing that, an `NPM_TOKEN` repository secret (an automation token). Used
+#      when it is present, so either arrangement works without editing this file.
+#
+# With neither, the publish fails with **404 on the PUT** — npm declines to say
+# whether the package exists to somebody it does not recognise. That message reads
+# as "wrong name" or "deleted package" and means "not authenticated"; it cost time
+# twice before the step below started saying so out loud.
 #
 # **What triggers it.** A change to `sdk/package.json` landing on `main`. The
 # version in the manifest is the decision — the same thing a reviewer read in the
@@ -99,7 +110,46 @@ jobs:
         if: steps.decide.outputs.publish == 'true'
         run: npm run sdk:build
 
+      # Which arrangement is in force, said before it matters rather than inferred
+      # from a failure afterwards.
+      - name: Say how this will authenticate
+        if: steps.decide.outputs.publish == 'true'
+        run: |
+          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "authenticating with the NPM_TOKEN secret"
+          else
+            echo "no NPM_TOKEN secret; relying on npm trusted publishing for this workflow"
+          fi
+
       - name: Publish
         if: steps.decide.outputs.publish == 'true'
         run: npm publish --provenance --access public
         working-directory: sdk
+        env:
+          # Empty when the secret is unset, which leaves trusted publishing to it.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # A 404 here is npm declining to recognise the publisher, not a missing
+      # package. Anybody reading this log needs the two ways out, not the riddle.
+      - name: Explain a refused publish
+        if: failure() && steps.decide.outputs.publish == 'true'
+        run: |
+          cat <<'MESSAGE'
+          The publish was refused. If the error was 404 on the PUT, that is npm
+          saying it does not recognise this publisher — not that the package is
+          missing. Configure one of:
+
+            1. Trusted publishing (preferred; no secret to hold)
+               npmjs.com -> the package -> Settings -> Trusted publisher
+                 Publisher:  GitHub Actions
+                 Repository: ${{ github.repository }}
+                 Workflow:   publish.yml        (matched by filename)
+                 Environment: leave empty, or add `environment:` to this job to match
+
+            2. An NPM_TOKEN repository secret (automation token). Note npm is
+               restricting tokens that bypass 2FA for direct publishing.
+
+          Then re-run this workflow; the version in sdk/package.json is unchanged,
+          so nothing needs bumping.
+          MESSAGE
+          exit 1
