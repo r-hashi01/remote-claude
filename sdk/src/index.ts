@@ -116,7 +116,13 @@ export function getLogs(config: ExecutorConfig, jobId: string, since = 0): Promi
   return new HttpJobGateway(config).logs(jobId, since);
 }
 
-/** The patch, or null while there is not one. */
+/**
+ * The patch, or null while there is not one.
+ *
+ * `git diff <baseBranch>..HEAD`: the whole branch since it left the base, so a
+ * continuation's patch includes the turns before it. `JobGateway.getDiff` has
+ * the rest of the contract, including what the base is pinned to.
+ */
 export function getDiff(config: ExecutorConfig, jobId: string): Promise<string | null> {
   return new HttpJobGateway(config).getDiff(jobId);
 }

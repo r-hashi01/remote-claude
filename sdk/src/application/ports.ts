@@ -23,7 +23,20 @@ export interface JobGateway {
   list(limit: number): Promise<JobSummary[]>;
   cancel(jobId: string): Promise<void>;
   logs(jobId: string, since: number): Promise<LogPage>;
-  /** The patch, or null while there is not one. */
+  /**
+   * The patch, or null while there is not one.
+   *
+   * `git diff <baseBranch>..HEAD` — everything the branch carries, not what the
+   * most recent turn added. A continuation runs on the branch it continues, so
+   * the second turn's patch contains the first turn's changes as well. There is
+   * no way to ask for one turn's increment; take the difference yourself if you
+   * need it.
+   *
+   * The range has two dots, and the left side is the base branch **as the
+   * sandbox cloned it** — frozen at the first turn, since a continuation
+   * restores that workspace rather than re-cloning. Commits that land on the
+   * real base branch between turns do not move it and do not show up here.
+   */
   getDiff(jobId: string): Promise<string | null>;
   sandboxes(): Promise<SandboxLedger>;
 }
