@@ -37,7 +37,20 @@ export interface JobUsage {
   turns: number | null;
 }
 
-/** One configured command (install / lint / test / build) that ran. */
+/**
+ * One step of the pipeline, in the order it ran.
+ *
+ * Not only the commands a caller configures. The executor's own steps are here
+ * as well — the environment check it runs before anything else, the git
+ * operations that put the work on a branch, and the agent run itself — so a real
+ * job carries a dozen or more. `install`, `lint`, `test` and `build` are the four
+ * that `commands` replaces; the rest are the pipeline's and their names are not
+ * a contract.
+ *
+ * Worth saying because this is what a consumer displays. Read as "the four
+ * configured commands", a step named `verify-environment` looks like something
+ * nobody asked for.
+ */
 export interface StepResult {
   name: string;
   command: string;
