@@ -433,10 +433,22 @@ describe('the runner and the Worker agree on job.json', () => {
  * why it wants a test in its way rather than a paragraph somewhere.
  */
 describe('nothing a caller sends can carry a credential', () => {
+  // Both halves. The SDK re-declares these shapes rather than importing them, and
+  // `sdk-contract.ts` does not close this: `Extends<sdk.StartJob, JobRequest>`
+  // stays true when the SDK grows a field the API lacks, because a type with
+  // extra properties still extends one without them. Checked by adding
+  // `oauthToken` to `sdk.StartJob` — typecheck passed.
+  //
+  // What did fail was `the CLI can express every job the API accepts`, saying the
+  // CLI had no flag for it. Following that failure where it points adds a
+  // `--oauth-token` flag, which is the opposite of the fix. So the guard has to
+  // reach the SDK itself and say why.
   const requestTypes = [
     ['src/domain/job/record.ts', 'JobRequest'],
     ['src/application/job-service.ts', 'ContinueRequest'],
     ['src/domain/job/pull-request.ts', 'PullRequestRequest'],
+    ['sdk/src/domain/job.ts', 'StartJob'],
+    ['sdk/src/domain/job.ts', 'ContinueJob'],
   ] as const;
 
   // Names a credential would plausibly arrive under. Not an exhaustive list of
