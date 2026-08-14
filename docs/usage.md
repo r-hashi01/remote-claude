@@ -11,7 +11,6 @@ running, see [Operating it](operating.md) instead.
 - [Another repository](#another-repository)
 - [Writing a prompt that survives one shot](#writing-a-prompt-that-survives-one-shot)
 - [When something fails](#when-something-fails)
-- [Interactive sessions (ACP)](#interactive-sessions-acp)
 - [HTTP API](#http-api)
 
 ## A job, end to end
@@ -58,7 +57,6 @@ remote-claude cancel <job-id>
 remote-claude list
 remote-claude sandboxes               # what is allocated and not reclaimed
 remote-claude health [--auth]
-remote-claude ui [--port N]           # a local dashboard
 ```
 
 **The SDK**, for a program — see [sdk/README.md](../sdk/README.md):
@@ -170,8 +168,8 @@ test     skip
 ```
 
 Four surfaces, in increasing detail: `status` for the summary above, `diff` for
-the patch, `logs` for everything the container printed, and `remote-claude ui`
-for a dashboard — which only opens on a machine holding the token.
+the patch, `logs` for everything the container printed, and `terminal` for
+watching it as it happens.
 
 **The agent's closing message is a summary, not an audit.** It is what the thing
 under review said about itself. What actually changed is only in the diff, and
@@ -383,29 +381,6 @@ steps that ran, with the command each one used and what it printed, plus the
 usage and the agent's closing message. `status` shows them, and `result.steps`
 carries them over the API — a failure is where that detail is worth most.
 
-## Interactive sessions (ACP)
-
-Alongside one-shot jobs there is a multi-turn session compatible with
-[Agent Client Protocol](https://agentclientprotocol.com) v1, so an editor can
-drive Claude Code in the sandbox as though it were local:
-
-```text
-editor ──ACP/stdio──▶ cli/acp-bridge.mjs ──HTTPS+SSE──▶ Worker ──▶ Sandbox
-```
-
-The remote leg is this project's own SSE stream, because ACP's remote transport
-is still a proposal; when it lands, only the bridge changes.
-
-A session takes a repository the same way a job does — `POST /acp/sessions`
-accepts `repo` and `baseBranch`, resolved by the same rules — clones it once, and
-reuses that working tree across turns, resuming Claude Code's own session so the
-context survives.
-
-Implemented: `initialize`, `session/new`, `session/prompt`, `session/cancel`, and
-`session/update` for messages, thoughts, tool calls, plans (TodoWrite becomes an
-ACP plan) and usage. Not implemented: `session/request_permission`, `fs/*`,
-`terminal/*`, `session/load`. Sessions are not connected to the job queue.
-
 ## HTTP API
 
 Every call needs `Authorization: Bearer $REMOTE_CLAUDE_TOKEN` except `/health`.
@@ -417,16 +392,13 @@ Every call needs `Authorization: Bearer $REMOTE_CLAUDE_TOKEN` except `/health`.
 | `GET` | `/jobs/:id` | One job, including `result` and `usage` |
 | `GET` | `/jobs/:id/logs?since=<seq>` | Logs. `format=text` for plain text |
 | `GET` | `/jobs/:id/diff` | The patch, or `404` while there is none |
+| `GET` | `/jobs/:id/output?offset=<n>` | One window of what the commands printed |
+| `GET` | `/jobs/:id/output/stream?offset=<n>` | The same, as SSE, as it is produced |
 | `POST` | `/jobs/:id/continue` | A follow-up turn: same branch, same workspace, same conversation |
 | `POST` | `/jobs/:id/cancel` | Cancel |
 | `GET` | `/sandboxes` | What this deployment allocated, and whether it got it back |
 | `GET` | `/health` | Unauthenticated liveness |
 | `GET` | `/health/auth` | Runs one prompt to prove Claude authentication works |
-| `POST` | `/acp/sessions` | Create a session, optionally with `repo` / `baseBranch` |
-| `GET` | `/acp/sessions/:id/stream?since=<n>` | SSE |
-| `POST` | `/acp/sessions/:id/prompt` | One turn |
-| `POST` | `/acp/sessions/:id/cancel` | Cancel the turn |
-| `DELETE` | `/acp/sessions/:id` | End the session |
 
 ```bash
 curl -X POST https://remote-claude.<subdomain>.workers.dev/jobs \

@@ -1,4 +1,3 @@
-import { ACP_PROTOCOL_VERSION } from '../../domain/agent/acp';
 import { Refusal } from '../../domain/job/errors';
 import type { ContinueRequest } from '../../application/job-service';
 import type { JobRequest } from '../../domain/job/record';
@@ -49,7 +48,7 @@ export async function route(request: Request, env: Env, deps: RouteDeps): Promis
     // The whole record, not three fields of it: a caller that has just created
     // something should not have to fetch it to learn what it created. `jobId` is
     // kept alongside `id` because that is what this response has always named it,
-    // and the CLI and dashboard read it.
+    // and consumers read it.
     return Response.json({ ...record, jobId: record.id }, { status: 202 });
   }
 
@@ -76,51 +75,6 @@ export async function route(request: Request, env: Env, deps: RouteDeps): Promis
 
   if (path === '/health/auth' && method === 'GET') {
     return await deps.probeClaudeAuth(env);
-  }
-
-  // ---- ACP session surface ------------------------------------------
-  // The interactive counterpart to /jobs. Sessions are multi-turn and stream ACP
-  // `session/update` notifications over SSE; the local bridge turns that into
-  // real ACP stdio for an editor.
-  if (path === '/acp/sessions' && method === 'POST') {
-    // Body is optional: a caller with nothing to override sends none.
-    const body = request.headers.get('content-type')?.includes('application/json')
-      ? await readJson<{ repo?: string; baseBranch?: string }>(request)
-      : {};
-
-    const sessionId = `s-${crypto.randomUUID()}`;
-    const session = env.ACP.get(env.ACP.idFromName(sessionId));
-    // Unreachable or disallowed repositories fail here, the same way they fail
-    // `POST /jobs` — before the caller is told a session exists at all.
-    const { repo, baseBranch } = await session.start(body);
-
-    return Response.json({ sessionId, protocolVersion: ACP_PROTOCOL_VERSION, repo, baseBranch }, { status: 201 });
-  }
-
-  const acp = /^\/acp\/sessions\/([A-Za-z0-9-]+)(\/stream|\/prompt|\/cancel)?$/.exec(path);
-  if (acp) {
-    const [, sessionId, suffix] = acp;
-    const session = env.ACP.get(env.ACP.idFromName(sessionId as string));
-
-    // The DO owns the SSE response so it can write to it as events arrive.
-    if (suffix === '/stream' && method === 'GET') return session.fetch(request);
-
-    if (suffix === '/prompt' && method === 'POST') {
-      const body = await readJson<{ text?: string }>(request);
-      const text = (body.text ?? '').trim();
-      if (!text) throw new Refusal('text is required');
-      return Response.json(await session.prompt(sessionId as string, text), { status: 202 });
-    }
-
-    if (suffix === '/cancel' && method === 'POST') {
-      await session.cancel();
-      return Response.json({ ok: true });
-    }
-
-    if (!suffix && method === 'DELETE') {
-      await session.close();
-      return Response.json({ ok: true });
-    }
   }
 
   const match =

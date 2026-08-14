@@ -3,10 +3,11 @@ import type { Env, Secrets } from './env';
 /**
  * Every secret this deployment holds, for the redactor to mask.
  *
- * There were three redactors — the HTTP entry point, the job coordinator, and
- * the ACP session — each with its own hand-written list, and **the session's was
- * missing the two R2 keys**. Nobody edited a rule to make that happen; the rule
- * was simply written down three times.
+ * There were three redactors — the HTTP entry point, the job coordinator, and the
+ * interactive session that has since been removed (ADR 0015) — each with its own
+ * hand-written list, and **one of them was missing the two R2 keys**. Nobody
+ * edited a rule to make that happen; the rule was simply written down three
+ * times.
  *
  * The `satisfies` clause is the part that matters: adding a credential to
  * `Secrets` and forgetting it here does not compile. That is a stronger

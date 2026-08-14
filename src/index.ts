@@ -24,7 +24,6 @@ import { route } from './interface/http/router';
 // bearing — migrations are keyed by class name, not by path.
 export { Sandbox } from './infrastructure/durable-objects/sandbox';
 export { JobManager } from './infrastructure/durable-objects/job-manager';
-export { AgentSession } from './infrastructure/durable-objects/agent-session';
 // Required by the Sandbox SDK for container routing.
 export { ContainerProxy } from '@cloudflare/sandbox';
 

@@ -153,7 +153,7 @@ src/
   infrastructure/     the ports implemented: Durable Objects, SQLite, R2, GitHub, the sandbox
 container/runner.mjs  the pipeline, executed inside the sandbox
 sdk/                  the published client
-cli/                  the local CLI and its dashboard
+cli/                  the local CLI
 ```
 
 `domain` and `application` run without workerd, a container, or a network, which
@@ -168,10 +168,17 @@ npm run sdk:typecheck
 ## Status
 
 Working: jobs, per-job commands, other repositories, push, pull requests,
-interactive ACP sessions, and retries for platform hiccups.
+follow-up turns on a finished or cancelled job ([ADR 0011](docs/adr/0011-continue-a-job-rather-than-steer-it.md)),
+watching a run's output as it happens ([ADR 0012](docs/adr/0012-two-views-of-a-running-job.md)),
+either credential ([ADR 0014](docs/adr/0014-two-credentials-one-at-a-time.md)),
+and retries for platform hiccups.
 
-Not working, and documented as such: the workspace cache reads its settings and
-is never called ([roadmap](docs/roadmap.md) RC-10). One failure mode is still
-unexplained — a runner that starts, says nothing and stops. It is retried rather
-than diagnosed, and a marker was added so the next occurrence says which half
-failed (RC-15).
+Boundaries worth knowing rather than discovering: the terminal view lives as long
+as the container and no longer, and carries no ANSI because commands run without a
+TTY. There is one way in — the job API, through the SDK or the CLI
+([ADR 0015](docs/adr/0015-one-way-in.md)).
+
+The failure mode that used to be listed here as unexplained — a runner that
+started, said nothing and stopped — was the sandbox's inactivity timer sleeping the
+container out from under a working job. Its cause and the guard against it are in
+[ADR 0006](docs/adr/0006-retry-only-before-the-runner-starts.md).

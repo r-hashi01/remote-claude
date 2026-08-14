@@ -72,8 +72,7 @@
   "durable_objects": {
     "bindings": [
       { "class_name": "Sandbox", "name": "Sandbox" },
-      { "class_name": "JobManager", "name": "JOBS" },
-      { "class_name": "AgentSession", "name": "ACP" }
+      { "class_name": "JobManager", "name": "JOBS" }
     ]
   },
 
@@ -91,6 +90,16 @@
       // jobs; Project/Task/Update/Output moved to the product side.
       "tag": "v3",
       "renamed_classes": [{ "from": "TaskManager", "to": "JobManager" }]
+    },
+    {
+      // The ACP session surface is gone (ADR 0015). Deleting the class rather
+      // than leaving it bound: an unused Durable Object class is a thing a
+      // reader has to work out the status of, and its storage is a thing nobody
+      // will ever read again. Sessions were single-conversation and short-lived,
+      // so there is nothing here to migrate — which is why this can be a delete
+      // at all.
+      "tag": "v4",
+      "deleted_classes": ["AgentSession"]
     }
   ],
 
