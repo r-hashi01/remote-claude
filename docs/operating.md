@@ -339,8 +339,10 @@ what is live is whatever was last deployed by hand. `gh secret list` shows it.
 (`claude setup-token` again), or `api.anthropic.com` is missing from
 `SANDBOX_ALLOWED_HOSTS`.
 
-**A job fails at `verify-no-api-key`** — an Anthropic API key is present inside
-the container. Look for it in the Dockerfile or in `vars`.
+**A job fails at `verify-environment`** — the container holds a credential it
+must not: an Anthropic API key, or a GitHub token. The step names which variable
+it found. Look for it in the Dockerfile or in `vars`; credentials are attached to
+outbound requests by the Worker and are not meant to exist inside (ADR 0002).
 
 **Cloning a private repository fails** — the App is not installed on it, or the
 private key is not PKCS#8. Both say so.

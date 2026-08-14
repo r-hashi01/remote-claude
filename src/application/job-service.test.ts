@@ -444,7 +444,7 @@ describe('following a running job', () => {
         diffStat: '',
         diffBytes: 0,
         steps: [
-          { name: 'verify-no-api-key', command: 'printenv …', exitCode: 0, success: true, durationMs: 12, output: '' },
+          { name: 'verify-environment', command: 'checks …', exitCode: 0, success: true, durationMs: 12, output: '' },
           { name: 'install', command: 'npm --prefix packages/spindle-core ci', exitCode: 1, success: false, durationMs: 874, output: 'npm error code EUSAGE' },
         ],
       })
@@ -456,7 +456,7 @@ describe('following a running job', () => {
     expect(job?.status).toBe('failed');
     expect(job?.error).toMatch(/step "install" failed/);
     // Which command ran, and what it printed — the reason to look at a failure.
-    expect(job?.result?.steps.map((step) => step.name)).toEqual(['verify-no-api-key', 'install']);
+    expect(job?.result?.steps.map((step) => step.name)).toEqual(['verify-environment', 'install']);
     expect(job?.result?.steps[1]?.command).toMatch(/npm --prefix/);
     expect(job?.result?.steps[1]?.output).toMatch(/EUSAGE/);
     // The reason lives on the record. Leaving a copy inside `result` would put

@@ -309,6 +309,49 @@ function skip(name, reason) {
   log('system', `⏭ ${name} — ${reason}`);
 }
 
+// ------------------------------------------------------- environment checks
+
+/**
+ * Variables that must not be set inside the container, and why their absence is
+ * the desired result.
+ *
+ * Credentials reach this container by being attached outside it — the Worker's
+ * outbound handler swaps in the Anthropic token and attaches GitHub's as Basic
+ * auth (ADR 0002) — so anything found here arrived by a route nobody intended.
+ *
+ * A check is a shell command that exits zero when the environment is as promised
+ * and prints a line either way. Written as data so the next invariant is an
+ * entry rather than a rewrite; nothing here assumes the check is about variables,
+ * only that it reports and exits.
+ */
+const ENVIRONMENT_CHECKS = [
+  absent(
+    ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],
+    'Claude Code will use the subscription credential',
+    'this environment must use the subscription credential only'
+  ),
+  absent(
+    ['GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_APP_PRIVATE_KEY'],
+    'git reaches GitHub through the Worker, which attaches the credential outside the container',
+    'this container must never hold a GitHub credential'
+  ),
+];
+
+/** A check that these variables are unset, and says so in both directions. */
+function absent(variables, whyGood, whyBad) {
+  const names = variables.join(' ');
+  return (
+    `set=""; for v in ${names}; do [ -n "\${!v}" ] && set="$set $v"; done; ` +
+    `if [ -n "$set" ]; then echo "SET in the container:$set — ${whyBad}"; exit 1; fi; ` +
+    `echo "checked ${variables.join(', ')}: none is set — ${whyGood}"`
+  );
+}
+
+/** Every check, in one script, failing if any of them failed. */
+function environmentChecks() {
+  return `failed=0\n${ENVIRONMENT_CHECKS.map((check) => `{ ${check} ; } || failed=1`).join('\n')}\nexit $failed`;
+}
+
 // -------------------------------------------------------------- the job
 
 /** Remembered for the failure path, which reports outside main()'s scope. */
@@ -327,38 +370,25 @@ async function main() {
   // credentials injected outside the container, which is exactly what this
   // process must never see.
 
-  // Prove no API-key credential is present.
+  // What the container has to be before any work starts.
   //
-  // This used to run `printenv ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN`, which
-  // exits 1 when the variables are unset — so the desired outcome was recorded
-  // as a failed step, and every healthy job reported one failure. The check was
-  // right and its record was wrong, which is worse than either: a reader who
-  // trusts the steps sees a problem that is not there, and one who learns to
-  // ignore that line will ignore it on the day it matters.
+  // One step, several checks. A step per check would grow the pipeline every time
+  // an invariant is added, and what a reader wants is one line saying the
+  // environment is as promised — with the detail underneath when they look.
   //
-  // Now the exit code means what the step means. Names are printed, never
-  // values.
+  // Each check says what it examined and which way is good news. The version
+  // before this printed "no API-key credential present", which said neither, and
+  // was read as a report about the GitHub credential by somebody with every
+  // reason to read it that way. A check nobody can interpret will be interpreted
+  // wrongly.
   //
-  // And the line says which credential it looked for. "no API-key credential
-  // present" was read as "the GitHub App credential did not arrive" by somebody
-  // who had every reason to think so: it named no key, and did not say that
-  // absence is the desired result. A check nobody can interpret is a check that
-  // will be interpreted wrongly.
-  const check = await run(
-    'verify-no-api-key',
-    'leaked=""; for v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; do ' +
-      '[ -n "${!v}" ] && leaked="$leaked $v"; done; ' +
-      'if [ -n "$leaked" ]; then ' +
-      'echo "an Anthropic API key IS present in the container:$leaked — this environment ' +
-      'must use the subscription credential only"; exit 1; fi; ' +
-      'echo "checked ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN: neither is set in the ' +
-      'container, so Claude Code will use the subscription credential (ADR 0002)"',
-    { allowFailure: true }
-  );
-  if (!check.success) {
+  // Names are printed, never values.
+  const environment = await run('verify-environment', environmentChecks(), {
+    allowFailure: true,
+  });
+  if (!environment.success) {
     throw new Error(
-      'ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN is set inside the container. ' +
-        'Refusing to run: this environment must use subscription OAuth only.'
+      `the container is not the environment this pipeline requires:\n${environment.output.trim()}`
     );
   }
 

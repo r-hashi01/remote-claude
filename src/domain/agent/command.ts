@@ -7,7 +7,7 @@ import { shellQuote } from '../shell/quote';
  * (see `claudeProcessEnvironment`), and this repeats it in the shell that
  * actually runs `claude`, because a fallback to API-key billing is the one
  * failure here that would be silent. The container is separately checked for
- * them by the runner's `verify-no-api-key` step, so this is the middle of three.
+ * them by the runner's `verify-environment` step, so this is the middle of three.
  *
  * `--verbose` is required alongside `--output-format stream-json` — Claude Code
  * rejects the latter without it.
