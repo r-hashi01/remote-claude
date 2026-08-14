@@ -12,11 +12,23 @@ name: Publish
 # package, pointing at this repository and at this file *by name*. The match is on
 # the filename — renaming this file breaks publishing until the setting is changed
 # to match.
+#
+# **What triggers it.** A change to `sdk/package.json` landing on `main`. The
+# version in the manifest is the decision — the same thing a reviewer read in the
+# release pull request — so nothing has to be remembered or typed afterwards. It
+# used to be a tag, which meant a release was a merge *and* a push, and the second
+# half was a human step that could be forgotten, mistyped, or done by somebody who
+# had not read the first half.
+#
+# Publishing the same version twice is not an error to guard against here: npm
+# refuses it. The check below asks first anyway, so a re-run of an old commit is a
+# no-op rather than a red build.
 on:
   workflow_dispatch:
   push:
-    tags:
-      - 'client-v*'
+    branches: [main]
+    paths:
+      - 'sdk/package.json'
 
 jobs:
   publish:
@@ -48,37 +60,46 @@ jobs:
       - name: Install SDK dependencies
         run: npm --prefix sdk install --no-audit --no-fund
 
-      # A tag that disagrees with the manifest is the one mistake this workflow
-      # can catch and no reviewer reliably does. Checked before anything is built,
-      # so it fails on the cheap side.
-      - name: Check the tag against the manifest
-        if: startsWith(github.ref, 'refs/tags/')
+      # Is there anything to do? `sdk/package.json` changes for reasons other than a
+      # release — a script, a dependency — and those merges should not fail for
+      # having nothing to publish. Asked before anything is built, so the common
+      # case costs one registry lookup.
+      - name: Decide whether this version is new
+        id: decide
         run: |
-          tagged="${GITHUB_REF_NAME#client-v}"
-          manifest="$(node -p "require('./sdk/package.json').version")"
-          if [ "$tagged" != "$manifest" ]; then
-            echo "tag ${GITHUB_REF_NAME} says ${tagged}, sdk/package.json says ${manifest}" >&2
-            exit 1
+          version="$(node -p "require('./sdk/package.json').version")"
+          name="$(node -p "require('./sdk/package.json').name")"
+          published="$(npm view "${name}@${version}" version 2>/dev/null || true)"
+          if [ -n "$published" ]; then
+            echo "${name}@${version} is already published; nothing to do"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publishing ${name}@${version}"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "publishing ${manifest}"
 
       - name: Typecheck
+        if: steps.decide.outputs.publish == 'true'
         run: |
           npx wrangler types
           npm run typecheck
           npm run sdk:typecheck
 
       - name: Test
+        if: steps.decide.outputs.publish == 'true'
         run: npm test
 
       - name: Test inside workerd
+        if: steps.decide.outputs.publish == 'true'
         run: npm run test:workers
 
       # `prepublishOnly` builds again on the way out. Building here as well is
       # what makes a build failure a failed job rather than a failed publish.
       - name: Build SDK
+        if: steps.decide.outputs.publish == 'true'
         run: npm run sdk:build
 
       - name: Publish
+        if: steps.decide.outputs.publish == 'true'
         run: npm publish --provenance --access public
         working-directory: sdk

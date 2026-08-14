@@ -418,11 +418,19 @@ spindle は 0.2.0 に上げ済み。
 リリース手順:
 
 ```bash
-# sdk/package.json を上げて PR → main
-git tag client-v0.3.3 && git push origin client-v0.3.3
+# sdk/package.json の version を上げて PR → main。これで公開される。
 ```
 
-タグと `sdk/package.json` が食い違っていたらワークフローがビルド前に落とす。
+**追記 (2026-08-14): タグをやめた。** 0.4.0 の直前まで手順は
+「マージ **して** `client-v<version>` タグを push」で、後半は人間の一手だった —
+忘れられる、打ち間違える、前半を読んでいない人がやる、のどれもあり得る。
+いまは `sdk/package.json` が main で変わったことが引き金で、
+**版そのものが決定**（リリース PR でレビュアーが読んだものと同じ）になる。
+
+タグと manifest の不一致チェックは、引き金が manifest になったので消えた。
+代わりに「その版がもう registry にあるか」を先に聞く。
+`sdk/package.json` はリリース以外の理由でも変わる（スクリプト、依存）ので、
+公開するものが無いマージが赤くならないようにするためでもある。
 **npm 側の trusted publisher はワークフローの*ファイル名*で照合される。**
 `publish.yml` を改名したら npmjs.com の設定も変えること。
 
