@@ -131,23 +131,35 @@ jobs:
 
       # A 404 here is npm declining to recognise the publisher, not a missing
       # package. Anybody reading this log needs the two ways out, not the riddle.
+      # Two refusals look nothing alike and mean nearly the same thing: this build
+      # is not allowed to publish. Both were met on the way to the first CI release,
+      # and both are cheaper to read than to diagnose.
       - name: Explain a refused publish
         if: failure() && steps.decide.outputs.publish == 'true'
         run: |
           cat <<'MESSAGE'
-          The publish was refused. If the error was 404 on the PUT, that is npm
-          saying it does not recognise this publisher — not that the package is
-          missing. Configure one of:
+          The publish was refused. Two ways that happens, and what each means:
 
-            1. Trusted publishing (preferred; no secret to hold)
+            404 on the PUT — npm does not recognise this publisher. It reads as a
+            missing package and means "not authenticated".
+
+            EOTP — the token was accepted, and the account requires a one-time
+            password for publishing. CI cannot supply one. A classic *Automation*
+            token bypasses 2FA where a granular one may not; trusted publishing
+            needs no token at all.
+
+          Either way, configure one of:
+
+            1. Trusted publishing (preferred; nothing to hold, nothing to expire)
                npmjs.com -> the package -> Settings -> Trusted publisher
                  Publisher:  GitHub Actions
                  Repository: ${{ github.repository }}
                  Workflow:   publish.yml        (matched by filename)
                  Environment: leave empty, or add `environment:` to this job to match
 
-            2. An NPM_TOKEN repository secret (automation token). Note npm is
-               restricting tokens that bypass 2FA for direct publishing.
+            2. An NPM_TOKEN secret that does not need an OTP — a classic Automation
+               token. Note npm is restricting those for direct publishing, so this
+               is the stopgap and the first option is the answer.
 
           Then re-run this workflow; the version in sdk/package.json is unchanged,
           so nothing needs bumping.
