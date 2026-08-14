@@ -25,8 +25,12 @@ remote-claude "Investigate the 500 on login and fix it"
 > anyone else" — and a deployment that runs other people's prompts on your
 > credential is doing the second one, whether or not anybody ever sees the token.
 > Standing this up as a shared service for a team is not a feature this project
-> has yet to add. It is the thing the bearer token and Cloudflare Access are
-> there to prevent. [Security](docs/operating.md#security).
+> has yet to add: there is no notion of a user anywhere in it — no accounts, no
+> seats, no per-person tokens, nothing that attributes a job to whoever asked for
+> it. Which is also the reason to say this out loud. Nothing in the software
+> enforces it. One bearer token is the whole gate, and handing that string to ten
+> people is something no part of the system would notice or object to.
+> [Security](docs/operating.md#security).
 
 ## Documentation
 
