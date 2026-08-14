@@ -26,6 +26,12 @@ import type { Sandbox } from './durable-objects/sandbox';
 export interface Secrets {
   /** Long-lived Claude subscription OAuth token from `claude setup-token`. */
   CLAUDE_CODE_OAUTH_TOKEN?: string;
+  /**
+   * Claude API key from the Claude Console. The alternative to the token above,
+   * never its companion: holding both leaves it undecided which account pays,
+   * and `claudeCredential` refuses rather than guessing.
+   */
+  ANTHROPIC_API_KEY?: string;
   /** Shared bearer token guarding this Worker's API. */
   REMOTE_CLAUDE_TOKEN?: string;
   /** GitHub App private key (PEM, PKCS#8 — see docs/operating.md). */
@@ -66,6 +72,11 @@ export interface Env extends Secrets {
   REPO_URL: string;
   DEFAULT_BASE_BRANCH: string;
   CLAUDE_AUTH_MODE?: string;
+  /**
+   * Model every job runs unless it names its own. Absent is Claude Code's
+   * default, which moves as models are released.
+   */
+  CLAUDE_MODEL?: string;
   MAX_CONCURRENCY?: string;
   JOB_TIMEOUT_MS?: string;
   CLAUDE_TIMEOUT_MS?: string;

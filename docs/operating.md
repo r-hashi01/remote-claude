@@ -22,20 +22,36 @@ already exists, see [Using it](usage.md).
 | Cloudflare | An account ID, and an API token for CI |
 | Resources | One Worker, three Durable Object classes, one container, one R2 bucket for artifacts |
 | Locally | Node 22+. **Docker is not needed** for day-to-day work — CI builds the image |
-| Anthropic | A Claude Pro or Max subscription. **No API key**: this environment authenticates by subscription OAuth only |
+| Anthropic | **One** credential: a Claude Pro/Max subscription token, or a Claude API key. Exactly one — a deployment holding both refuses to run, because which account pays would be undecided |
 
 `wrangler deploy` creates the Worker, the Durable Objects and the container. The
 only manual pieces are the API token, the account ID, and the GitHub App.
 
 ## First-time setup
 
-### 1. A Claude token
+### 1. A Claude credential
+
+Pick one of the two. Whichever you store is the one the executor uses — there is
+no mode flag to keep in step with it, and a deployment holding both refuses every
+job rather than guessing which account to bill.
+
+**A subscription**, if this executor is yours and you will be the one sending it
+work:
 
 ```bash
 claude setup-token
 ```
 
-Keep the value. It never goes into the repository or the image.
+**An API key**, from the [Claude Console](https://platform.claude.com/), if
+anything other than you at a keyboard drives it — a scheduled job, a bot, a
+product, anyone else's prompts. That is the credential Anthropic's terms point
+developers at, and the subscription is not usable that way
+([ADR 0013](adr/0013-the-executor-belongs-to-whoever-deployed-it.md),
+[ADR 0014](adr/0014-two-credentials-one-at-a-time.md)). Note that the cost model
+changes with it: per-token billing rather than a flat monthly fee
+(see [Cost](#cost)).
+
+Keep the value. Neither goes into the repository or the image.
 
 ### 2. A GitHub App
 
@@ -74,7 +90,9 @@ openssl rand -hex 32
 ```bash
 npm install
 
-npx wrangler secret put CLAUDE_CODE_OAUTH_TOKEN     # step 1
+npx wrangler secret put CLAUDE_CODE_OAUTH_TOKEN     # step 1 — a subscription…
+# …or, instead of that one and never alongside it:
+# npx wrangler secret put ANTHROPIC_API_KEY         # step 1 — the Claude API
 npx wrangler secret put REMOTE_CLAUDE_TOKEN         # step 3
 npx wrangler secret put GITHUB_APP_ID               # step 2
 npx wrangler secret put GITHUB_APP_INSTALLATION_ID  # step 2
@@ -87,7 +105,7 @@ key that is gone cannot be committed by accident.
 
 | Secret | Needed for |
 | --- | --- |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Running the agent at all |
+| `CLAUDE_CODE_OAUTH_TOKEN` **or** `ANTHROPIC_API_KEY` | Running the agent at all. Exactly one: neither means every job fails at the first request to Anthropic, and both means the same — with a message saying so, in both cases |
 | `REMOTE_CLAUDE_TOKEN` | Guarding this API. **Unset means every request is refused with 503** |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_INSTALLATION_ID` | Cloning, and pushing |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Only the workspace cache, which is [not wired](#known-limits) |
@@ -160,7 +178,8 @@ npx wrangler deploy
 | --- | --- | --- |
 | `REPO_URL` | — | The repository a job works on when it names none |
 | `DEFAULT_BASE_BRANCH` | `main` | |
-| `CLAUDE_AUTH_MODE` | `proxy` | `proxy` keeps the real token out of the container. `direct` passes it in — a fallback |
+| `CLAUDE_AUTH_MODE` | `proxy` | `proxy` keeps the real credential out of the container. `direct` passes it in — a fallback |
+| `CLAUDE_MODEL` | — | The model every job runs unless it names its own: an alias (`opus`, `sonnet`, `haiku`) or a model id. Unset is Claude Code's own default, which moves as models are released |
 | `MAX_CONCURRENCY` | `3` | Jobs at once. Keep `max_instances` at least this high |
 | `JOB_TIMEOUT_MS` | `1800000` | Whole job |
 | `CLAUDE_TIMEOUT_MS` | `1500000` | The agent step alone |
@@ -169,6 +188,13 @@ npx wrangler deploy
 | `ALLOW_CUSTOM_REPO` | `true` | Whether a job may name another repository |
 | `SANDBOX_ALLOWED_HOSTS` | see below | Everything else is blocked |
 | `INSTALL_COMMAND`, `LINT_COMMAND`, `TEST_COMMAND`, `BUILD_COMMAND` | `""` | Defaults for `REPO_URL`; any job may override them |
+
+**Which credential is used has no variable.** It is whichever of
+`CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` is stored, for the same reason
+the workspace cache has no flag: a flag and a secret can disagree, and the failure
+that follows is a request signed with the wrong credential — which reads as
+"Claude is broken" rather than as a configuration mistake. `CLAUDE_AUTH_MODE` is
+about *where* the credential lives, not *which* one it is.
 
 Default allowed hosts: `github.com`, `codeload.github.com`, `api.github.com`,
 `objects.githubusercontent.com`, `api.anthropic.com`, `registry.npmjs.org`.
@@ -295,17 +321,20 @@ question.
 | | |
 | --- | --- |
 | Isolation | One job per container, destroyed afterwards |
-| Credentials | In `proxy` mode the real tokens never enter the container ([ADR 0002](adr/0002-no-credentials-inside-the-container.md)) |
+| Credentials | In `proxy` mode the real credential never enters the container ([ADR 0002](adr/0002-no-credentials-inside-the-container.md)) |
 | Secret masking | Everything is redacted before storage: known values, plus patterns. The list is checked at compile time, so adding a secret and forgetting to mask it does not build |
-| API-key fallback | Refused three ways: `x-api-key` is stripped on the way out, the variables are unset for every command, and each job proves they are absent before running |
+| Crossing the schemes | Refused three ways in both directions: the other scheme's header is stripped on the way out, its variables are unset for every command, and each job proves they are absent before running. A subscription deployment cannot fall back to per-token billing, and an API-key deployment cannot fall back onto somebody's plan ([ADR 0014](adr/0014-two-credentials-one-at-a-time.md)) |
+| Whose credential | Never a caller's. No request type has a field for one, and [a test](../src/conventions.test.ts) fails if somebody adds one |
 | Repository access | `https` on `github.com`, no embedded credentials, and within the App installation — confirmed with GitHub before the job starts |
 | Authentication | A bearer token, compared in constant time. **No token configured means 503, never open** |
 | Network | Deny by default; only the allowlist, over ports 80 and 443 |
 
-This is a personal deployment. Do not arrange for it to serve other people's
-requests on your subscription credential — that is what the Anthropic terms
-forbid, and the guard for it is the token and Cloudflare Access, not the number
-of repositories it can see.
+Do not arrange for it to serve other people's requests on your **subscription**
+credential — that is what the Anthropic terms forbid, and the guard for it is the
+token and Cloudflare Access, not the number of repositories it can see. An
+**API-key** deployment is the arrangement those terms point at, and the guard
+above is the same one: the bearer token is what stands between the executor and
+whoever finds its URL.
 
 ## Cost
 
@@ -318,10 +347,16 @@ Beyond the $5/month plan:
 | Durable Objects | Requests and SQLite | Jobs pruned after 7 days, logs capped at 20,000 lines |
 | Worker requests | Including polling | Follow polls between 0.4s and 1.5s |
 | R2 | Storage and operations | Artifacts only; the cache is off |
-| **Anthropic** | **Nothing.** The subscription is flat, and no API key is used | One person's arithmetic. It does not extend: serving other people means API keys and per-token billing ([terms](https://code.claude.com/docs/en/legal-and-compliance)) |
+| **Anthropic** | Depends on which credential is configured. On a **subscription**: nothing — it is flat, and this is one person's arithmetic. On an **API key**: per token, and the dominant cost by a wide margin — a single job doing real work on a large model is dollars, not cents | `CLAUDE_MODEL`, and `--model` per job. The model is the one lever here: a small model on mechanical work costs an order of magnitude less than a large one, and `remote-claude status` reports `usage` and cost per job so the arithmetic is available rather than assumed |
 
 The first three settings to reach for: `MAX_CONCURRENCY: "1"`,
 `SANDBOX_SLEEP_AFTER: "2m"`, and leaving `instance_type` alone.
+
+An API-key deployment turns an unattended loop into a bill that grows while
+nobody is watching. Reach for `MAX_CONCURRENCY`, `JOB_TIMEOUT_MS` and a smaller
+`CLAUDE_MODEL` before reaching for anything else, and set a spend limit in the
+[Claude Console](https://platform.claude.com/) — this executor cannot enforce
+one, and per-job cost is only visible after the job.
 
 ## Troubleshooting
 
@@ -335,9 +370,18 @@ the intended behaviour.
 the repository secret is missing. Until it is set, `git push` does not deploy and
 what is live is whatever was last deployed by hand. `gh secret list` shows it.
 
-**`health --auth` fails** — the OAuth token is wrong or expired
-(`claude setup-token` again), or `api.anthropic.com` is missing from
-`SANDBOX_ALLOWED_HOSTS`.
+**`health --auth` fails** — the credential is wrong or expired (an OAuth token is
+renewed with `claude setup-token`; an API key is replaced in the Claude Console),
+or `api.anthropic.com` is missing from `SANDBOX_ALLOWED_HOSTS`. The `scheme=` in
+its output says which credential answered — worth reading even when it says `ok`,
+because an executor holding the credential you did not mean to use works
+perfectly and bills the wrong account.
+
+**`no Claude credential is configured` / `both … are configured` (503)** — exactly
+one of `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY`, and the extra one goes
+with `npx wrangler secret delete <name>`. There is no variable that selects
+between them: which one is stored *is* the selection
+([ADR 0014](adr/0014-two-credentials-one-at-a-time.md)).
 
 **A job fails at `verify-environment`** — the container holds a credential it
 must not: an Anthropic API key, or a GitHub token. The step names which variable

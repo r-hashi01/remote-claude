@@ -1,3 +1,4 @@
+import { normaliseModel } from '../agent/model';
 import { branchForJob, sanitizeRef } from './branch';
 import { Refusal } from './errors';
 import { normalisePrompt } from './prompt';
@@ -26,6 +27,8 @@ export interface CreateJobInput {
   commands?: Partial<JobCommands>;
   /** Open a pull request when the work lands. */
   pullRequest?: PullRequestRequest;
+  /** Run this model instead of the deployment's. */
+  model?: string;
   now: number;
 }
 
@@ -36,6 +39,8 @@ export interface ContinueJobInput {
   options?: Partial<JobOptions>;
   commands?: Partial<JobCommands>;
   pullRequest?: PullRequestRequest;
+  /** Switch models for this turn. Unspecified keeps the previous turn's. */
+  model?: string;
   now: number;
 }
 
@@ -64,6 +69,7 @@ export class Job {
     const prompt = normalisePrompt(input.prompt);
     const baseBranch = sanitizeRef(input.baseBranch);
     const branch = input.branch ? sanitizeRef(input.branch) : branchForJob(input.id);
+    const model = normaliseModel(input.model);
 
     return new Job({
       id: input.id,
@@ -80,6 +86,7 @@ export class Job {
       },
       commands: definedOnly(input.commands),
       ...(input.pullRequest ? { pullRequest: input.pullRequest } : {}),
+      ...(model ? { model } : {}),
     });
   }
 
@@ -131,6 +138,10 @@ export class Job {
       options: { ...before.options, ...input.options },
       commands: { ...before.commands, ...input.commands },
       pullRequest: input.pullRequest ?? before.pullRequest,
+      // The same model, unless this turn names another — a follow-up that
+      // silently changed model would be a different agent answering the
+      // question the last one stopped on.
+      model: input.model ?? before.model,
       now: input.now,
     });
 
@@ -193,6 +204,11 @@ export class Job {
   /** What this job runs instead of the deployment's commands. */
   get commandOverrides(): Partial<JobCommands> {
     return this.record.commands ?? {};
+  }
+
+  /** The model this job asked for, if it asked for one. */
+  get model(): string | undefined {
+    return this.record.model;
   }
 
   get isTerminal(): boolean {
@@ -332,6 +348,17 @@ export class Job {
    */
   resolveCommands(configured: JobCommands): JobCommands {
     return { ...configured, ...this.commandOverrides };
+  }
+
+  /**
+   * The model this job will actually run.
+   *
+   * This job's, then the deployment's, then nothing — and nothing means Claude
+   * Code's own default rather than a name written down here. Unlike a command,
+   * there is no "skip": every job runs some model.
+   */
+  resolveModel(configured: string | undefined): string | undefined {
+    return this.model ?? configured;
   }
 
   settle(status: JobStatus, now: number, details: SettleDetails = {}): boolean {

@@ -151,6 +151,15 @@ export interface JobRecord {
   /** Open a pull request when the work lands. Implies a push. */
   pullRequest?: PullRequestRequest;
   /**
+   * The model this job runs, instead of the deployment's.
+   *
+   * Absent means the deployment's `CLAUDE_MODEL`, and absent there means Claude
+   * Code's own default. Recorded on the job because which model did the work is
+   * part of reading a result: two jobs on the same prompt are not comparable
+   * unless it is known.
+   */
+  model?: string;
+  /**
    * The workspace this job left behind, if one was kept.
    *
    * Present once the job has settled and its tree and conversation were stored.
@@ -205,6 +214,16 @@ export interface JobRequest {
   keepSandbox?: boolean;
   /** Push the branch to origin. Requires ALLOW_PUSH=true on the Worker. */
   push?: boolean;
+  /**
+   * Run this model instead of the deployment's.
+   *
+   * An alias (`opus`, `sonnet`, `haiku`) or a model id. Absent inherits
+   * `CLAUDE_MODEL` from the deployment, and absent there is Claude Code's own
+   * default — which is the right answer for most jobs and the wrong one when a
+   * job is cheap enough to be worth a smaller model, or hard enough to be worth
+   * the largest.
+   */
+  model?: string;
   /**
    * Open a pull request for the branch. Implies `push`.
    *

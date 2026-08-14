@@ -15,6 +15,7 @@ import type { Env, Secrets } from './env';
  */
 const MASKED = {
   CLAUDE_CODE_OAUTH_TOKEN: true,
+  ANTHROPIC_API_KEY: true,
   REMOTE_CLAUDE_TOKEN: true,
   GITHUB_APP_PRIVATE_KEY: true,
   R2_ACCESS_KEY_ID: true,

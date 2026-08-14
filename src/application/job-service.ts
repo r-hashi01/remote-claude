@@ -93,6 +93,8 @@ export interface ContinueRequest {
   push?: boolean;
   commands?: Partial<JobCommands>;
   pullRequest?: PullRequestRequest;
+  /** Switch models for this turn. Unspecified keeps the previous turn's. */
+  model?: string;
 }
 
 export interface JobServiceDeps {
@@ -227,6 +229,8 @@ export class JobService {
       },
       commands: request.commands,
       pullRequest: request.pullRequest,
+      // Refused here, before a sandbox exists, if it is not a model name at all.
+      model: request.model,
       now: clock.now(),
     });
 
@@ -260,6 +264,7 @@ export class JobService {
       },
       commands: request.commands,
       pullRequest: request.pullRequest,
+      model: request.model,
       now: clock.now(),
     });
 
@@ -476,6 +481,14 @@ export class JobService {
           // install step is not covered by skipChecks, so a job on another
           // repository has to be able to replace it.
           commands: job.resolveCommands(policy.commands),
+          // This job's model, else the deployment's, else absent — and absent
+          // means the runner passes no `--model`, leaving Claude Code's own
+          // default rather than a name frozen into this repository.
+          model: job.resolveModel(policy.model),
+          // Which credential the container is set up to use. The runner clears
+          // the other scheme's variables and checks they are gone; it never sees
+          // the credential itself either way (ADR 0002).
+          authScheme: policy.claudeAuthScheme,
           stepTimeoutMs: policy.jobTimeoutMs,
           claudeTimeoutMs: policy.claudeTimeoutMs,
         }),

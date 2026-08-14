@@ -104,12 +104,25 @@
     // is deprecated (sandbox/guides/2026-deprecation).
     "SANDBOX_TRANSPORT": "rpc",
 
-    // "proxy"  : real OAuth token never enters the container. The Worker's
-    //            outbound handler swaps a placeholder for the real token on
-    //            requests to api.anthropic.com. RECOMMENDED.
-    // "direct" : real OAuth token is passed to the claude process as an env
+    // Where the credential lives — NOT which credential it is. Which one is used
+    // is decided by which secret is stored (CLAUDE_CODE_OAUTH_TOKEN for a
+    // subscription, ANTHROPIC_API_KEY for the Claude API, never both), because a
+    // flag and a secret can disagree and the resulting failure is a request
+    // signed with the wrong credential. See docs/adr/0014.
+    //
+    // "proxy"  : the real credential never enters the container. The Worker's
+    //            outbound handler swaps a placeholder for it on requests to
+    //            api.anthropic.com. RECOMMENDED.
+    // "direct" : the real credential is passed to the claude process as an env
     //            var inside the container.
     "CLAUDE_AUTH_MODE": "proxy",
+
+    // Model every job runs unless it names its own with `model` / `--model`.
+    // Unset means Claude Code's own default, which moves as models are released —
+    // naming one here freezes it, which is a choice worth making deliberately
+    // rather than by copying a line.
+    //
+    //   "CLAUDE_MODEL": "claude-opus-4-5",
 
     "MAX_CONCURRENCY": "3",
     "JOB_TIMEOUT_MS": "1800000",

@@ -9,9 +9,9 @@ Please do not open a public issue for anything exploitable. There is no bounty
 and one maintainer, so the honest expectation is a first reply within a week and
 no guaranteed timeline after that.
 
-Include the deployment's configuration if you can — auth mode, whether
-`ALLOW_CUSTOM_REPO` is on, and which commands the job was allowed to run. Most of
-this project's behaviour depends on them.
+Include the deployment's configuration if you can — auth mode, which credential
+scheme it holds, whether `ALLOW_CUSTOM_REPO` is on, and which commands the job was
+allowed to run. Most of this project's behaviour depends on them.
 
 ## What this thing is, as a threat model
 
@@ -20,7 +20,7 @@ credentials that belong to whoever deployed it. Three assets are worth naming:
 
 | | |
 | --- | --- |
-| The Claude credential | A subscription OAuth token. In `proxy` mode it never enters the container ([ADR 0002](docs/adr/0002-no-credentials-inside-the-container.md)) |
+| The Claude credential | A subscription OAuth token **or** a Claude API key — one per deployment ([ADR 0014](docs/adr/0014-two-credentials-one-at-a-time.md)). In `proxy` mode neither enters the container ([ADR 0002](docs/adr/0002-no-credentials-inside-the-container.md)). An API key is the more attractive asset of the two: it has no session to expire and spends per token |
 | The GitHub App credential | Reaches exactly the repositories its installation covers, and no others ([ADR 0010](docs/adr/0010-the-credential-defines-the-repositories.md)) |
 | The API bearer token | Anything holding it can spend the two above |
 
@@ -55,8 +55,11 @@ as a discussion, but they will not be treated as reports.
 
 1. **Put the Worker behind Cloudflare Access.** The bearer token is the last line
    of defence, not the only one
-2. **Keep it to one person.** The container signs in as you, and Anthropic's
-   consumer terms say you "may not make your Account available to anyone else"
+2. **On a subscription, keep it to one person.** The container signs in as you,
+   and Anthropic's consumer terms say you "may not make your Account available to
+   anyone else". An API-key deployment is not bound by that, but nothing about it
+   is safer to leave reachable: set a spend limit in the Claude Console, because
+   this executor cannot enforce one
 
 ## Supported versions
 

@@ -29,7 +29,7 @@ job settles:
 | Step | What it is |
 | --- | --- |
 | clone | Done by the Worker, because it needs a credential the container must never see |
-| `verify-environment` | Refuses to run unless the container is as promised: no Anthropic API key (this environment is subscription-only) and no GitHub credential (the Worker attaches that outside the container) |
+| `verify-environment` | Refuses to run unless the container is as promised: none of the credentials belonging to the *other* auth scheme (a subscription deployment must hold no API key, and an API-key deployment must hold no subscription token), and no GitHub credential — the Worker attaches those outside the container |
 | `git-branch` | `claude/<job-id>`, cut from the base branch. `main` is never touched |
 | `install` | Your install command. **Runs even with `skipChecks`** |
 | `claude-code` | The agent, non-interactive, with permissions bypassed |
@@ -90,10 +90,38 @@ jobs while the jobs themselves keep running.
 | `branch` | `--branch` | `claude/<job-id>` | Work on a named branch instead |
 | `repo` | `--repo` | the deployment's `REPO_URL` | [Another repository](#another-repository) |
 | `commands` | `--install` `--lint` `--test` `--build` | the deployment's | [Per-job commands](#per-job-commands) |
+| `model` | `--model` | the deployment's `CLAUDE_MODEL` | [Choosing a model](#choosing-a-model) |
 | `skipChecks` | `--skip-checks` | `false` | Skip lint/test/build. **Not install** |
 | `push` | `--push` | `false` | Push the work branch |
 | `pullRequest` | `--pr` | — | Push and open a pull request |
 | `keepSandbox` | `--keep` | `false` | Leave the container up for 30 minutes to look at |
+
+### Choosing a model
+
+```bash
+remote-claude --model haiku "bump the version in package.json and the lockfile"
+remote-claude --model opus "work out why the login 500s under concurrency"
+```
+
+An alias (`opus`, `sonnet`, `haiku`) or a full model id
+(`claude-opus-4-5-20251101`). Leaving it out runs the deployment's `CLAUDE_MODEL`,
+and a deployment that has not set one runs Claude Code's own default — which is
+the right answer for most jobs and moves as models are released.
+
+The executor keeps no list of valid models, deliberately: a list here would be
+stale the week a model ships. What it checks is that the value is shaped like a
+model name, so a sentence gets a `400` immediately rather than a container and
+twenty seconds. Whether the name means anything is Anthropic's answer, and it
+arrives as the agent step failing with a message that names the model.
+
+Two things follow from that:
+
+- On an API-key deployment this is the cost lever. `remote-claude status <id>`
+  reports `usage` — tokens and dollars — per job, so the comparison is available
+  rather than assumed.
+- A follow-up turn keeps the model the previous turn ran unless it names another.
+  `remote-claude continue <id> --model opus "..."` is the escalation: the same
+  branch, the same conversation, a larger model reading it.
 
 ### Per-job commands
 
@@ -341,6 +369,9 @@ passing on verbatim.
 | `pushing is disabled on it` | `ALLOW_PUSH` is off on the deployment | Fetch the diff, or turn it on |
 | `cannot write to <owner/name>` | The App's Contents permission is read-only | Raise it, and accept the change on the installation |
 | `cloning ... at branch "<x>" failed` | No such branch, or no access | Check the base branch |
+| `"<x>" is not a model name` | `model` was something else — a sentence, a path | Pass an alias or a model id. Refused before anything was allocated |
+| `no Claude credential is configured` / `both ... are configured` | The deployment holds neither credential, or both | Store exactly one on the Worker — see [Operating it](operating.md#1-a-claude-credential) |
+| `this environment must use ... only` (in `verify-environment`) | The container held the other scheme's credential | A deployment misconfiguration, not a job. The step names which variable |
 
 Platform hiccups are retried by the executor before the runner starts, and only
 there: once the runner is up, retrying would re-run your prompt. A job that

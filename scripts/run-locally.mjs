@@ -28,6 +28,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claudeCredential } from '../src/domain/agent/credential.ts';
 import { claudeProcessEnvironment } from '../src/domain/agent/environment.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -59,6 +60,18 @@ if (clone.status !== 0) {
 const stateDir = mkdtempSync(join(tmpdir(), 'remote-claude-'));
 const branch = `local/${Date.now().toString(36)}`;
 
+// Derived the same way the Worker derives it, from whichever credential is in
+// this shell rather than from a flag. A deployment holds one; a laptop may hold
+// both, and then this says so instead of picking.
+const credential = claudeCredential({
+  oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+if (credential.problem && !noAgent) {
+  process.stderr.write(`${credential.problem}\n`);
+  process.exit(2);
+}
+
 writeFileSync(
   join(stateDir, 'job.json'),
   JSON.stringify({
@@ -68,6 +81,8 @@ writeFileSync(
     baseBranch: 'main',
     options: { skipChecks: false, keepSandbox: false, push: false },
     commands: { install: '', lint: '', test: '', build: '' },
+    authScheme: credential.scheme,
+    model: process.env.CLAUDE_MODEL?.trim() || undefined,
     stepTimeoutMs: 600_000,
     claudeTimeoutMs: 600_000,
   })
@@ -86,7 +101,9 @@ process.stderr.write(`state:  ${stateDir}\nclone:  ${checkout}\nsource: ${repoDi
 // is where `claude setup-token` left your credentials, so moving it logs you out.
 const { CLAUDE_CONFIG_DIR: _containerOnly, ...overrides } = claudeProcessEnvironment({
   authMode: 'direct',
+  scheme: credential.scheme,
   oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+  apiKey: process.env.ANTHROPIC_API_KEY,
   ci: true,
 });
 const env = { ...process.env, ...overrides, REPO_DIR: checkout, IS_SANDBOX: '1' };

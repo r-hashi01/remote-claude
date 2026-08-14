@@ -68,7 +68,9 @@ export class AgentSession extends DurableObject<Env> implements SessionStore, Up
       claudeEnvironment: () =>
         claudeProcessEnvironment({
           authMode: config.claudeAuthMode,
+          scheme: config.claudeAuthScheme,
           oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+          apiKey: env.ANTHROPIC_API_KEY,
           ci: false,
         }),
     });

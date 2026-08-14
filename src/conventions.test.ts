@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { globSync } from 'node:fs';
+import { unsetForeignCredentials } from './domain/agent/command';
 
 /**
  * Checks about the code rather than about its behaviour.
@@ -479,10 +480,40 @@ describe('nothing a caller sends can carry a credential', () => {
     //
     // Not `src/infrastructure/**`: reading it from `Env` is the intended path,
     // and the only one.
+    // Both credentials, because there are two schemes now and the argument is
+    // the same for each: a request that could name `ANTHROPIC_API_KEY` is a
+    // request that could bring its own.
     const offenders = sources
       .filter((path) => path.startsWith('src/interface/'))
-      .filter((path) => withoutComments(read(path)).includes('CLAUDE_CODE_OAUTH_TOKEN'));
+      .filter((path) =>
+        /CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY/.test(withoutComments(read(path)))
+      );
 
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * One rule, two copies, and no import between them.
+ *
+ * Which credential variables `claude` must not find set depends on the scheme,
+ * and it is written twice: in `domain/agent/command.ts` for the Worker's own
+ * invocations, and in `container/runner.mjs` for the job pipeline. The runner is
+ * plain JS shipped into a container and cannot import from `src`.
+ *
+ * Both directions of disagreement are bad and neither is loud. A runner that
+ * unsets `ANTHROPIC_API_KEY` under the API-key scheme clears the credential the
+ * job was configured to use, and `claude` fails on a correctly configured
+ * deployment. A runner that leaves the subscription token set under the API-key
+ * scheme bills the wrong account and works.
+ */
+describe('the runner and the Worker clear the same credentials', () => {
+  test('every scheme’s unset line appears verbatim in the runner', () => {
+    const runner = read('container/runner.mjs');
+    for (const scheme of ['subscription', 'api-key'] as const) {
+      expect(runner, `the runner does not clear what ${scheme} must clear`).toContain(
+        unsetForeignCredentials(scheme)
+      );
+    }
   });
 });

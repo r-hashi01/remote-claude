@@ -5,13 +5,26 @@
  * whether its Claude credential works, and what it has allocated.
  */
 
-/** Result of the executor's end-to-end Claude authentication probe. */
+/**
+ * Result of the executor's end-to-end Claude authentication probe.
+ *
+ * `authScheme` is which credential answered — `subscription-oauth` or
+ * `anthropic-api-key`. Worth reading even when `ok` is true: an executor
+ * configured with the credential you did not mean to use works perfectly and
+ * bills the wrong account.
+ */
 export interface AuthProbe {
   ok: boolean;
+  /** Why there is nothing to probe: no credential configured, or two of them. */
   reason?: string;
   authMode?: 'proxy' | 'direct';
   authScheme?: string;
+  /** A real API key inside the container. Only the API-key scheme in direct mode. */
   apiKeyInContainer?: boolean;
+  /** Either credential inside the container — that is, direct mode. */
+  credentialInContainer?: boolean;
+  /** The model the executor runs. Absent means Claude Code's own default. */
+  model?: string;
   output?: string;
 }
 

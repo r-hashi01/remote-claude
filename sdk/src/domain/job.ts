@@ -137,6 +137,13 @@ export interface JobRecord {
   /** What this job asked for, if it asked for a pull request. */
   pullRequest?: PullRequestRequest;
   /**
+   * The model this job asked for, if it asked for one.
+   *
+   * Absent means it ran whatever the executor is configured with, which the
+   * executor reports through `GET /health/auth` rather than per job.
+   */
+  model?: string;
+  /**
    * The job this one continues, when it is a follow-up turn.
    *
    * A continuation runs on the same branch as the job it continues, so the diff
@@ -205,6 +212,16 @@ export interface StartJob {
    * this was should override them.
    */
   pullRequest?: PullRequestRequest;
+  /**
+   * Run this model instead of the executor's configured one.
+   *
+   * An alias (`opus`, `sonnet`, `haiku`) or a model id
+   * (`claude-opus-4-5-20251101`). Unspecified uses the executor's `CLAUDE_MODEL`,
+   * and an executor that has not set one uses Claude Code's own default. The
+   * executor keeps no list of valid models — anything shaped like a name is
+   * passed through, and a name Anthropic does not know fails at the agent step.
+   */
+  model?: string;
 }
 
 /**
@@ -212,8 +229,8 @@ export interface StartJob {
  *
  * Only the prompt is required — the answer to whatever the previous turn stopped
  * for. Everything else is inherited from the job being continued: the
- * repository, the base, the branch, and the commands. The options here override
- * that job's, rather than resetting them.
+ * repository, the base, the branch, the commands, and the model. The options
+ * here override that job's, rather than resetting them.
  */
 export interface ContinueJob {
   prompt: string;
@@ -222,6 +239,8 @@ export interface ContinueJob {
   push?: boolean;
   commands?: Partial<JobCommands>;
   pullRequest?: PullRequestRequest;
+  /** Switch models for this turn. Unspecified keeps the previous turn's. */
+  model?: string;
 }
 
 export type LogStream = 'system' | 'stdout' | 'stderr';

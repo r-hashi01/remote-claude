@@ -1,7 +1,7 @@
 /**
  * Where an executor lives.
  *
- * A deployment holds a Claude subscription credential and a GitHub App key, and
+ * A deployment holds a Claude credential and a GitHub App key, and
  * the bearer token that guards it is sent on every call — so reaching one over
  * plaintext is refused rather than supported quietly. Loopback is the exception:
  * `wrangler dev` serves http on localhost and there is nothing to intercept.

@@ -1,3 +1,4 @@
+import type { ClaudeAuthScheme } from '../../domain/agent/credential';
 import type { Job } from '../../domain/job/job';
 import type { JobCommands, JobStatus, LogLine, LogStream } from '../../domain/job/record';
 import type { SandboxLedgerEntry } from '../../domain/sandbox/ledger';
@@ -169,4 +170,20 @@ export interface ExecutorPolicy {
   sleepAfter: string;
   /** The deployment's defaults. A job may override them per key. */
   commands: JobCommands;
+  /**
+   * Which credential this deployment holds — not the credential itself.
+   *
+   * Here rather than only in the infrastructure's config, unlike the auth
+   * *mode*, because the command line these use cases build depends on it: which
+   * credential variables have to be cleared before `claude` runs is a different
+   * answer for a subscription than for an API key, and getting it wrong is
+   * silent in both directions (`foreignCredentialVariables`).
+   */
+  claudeAuthScheme: ClaudeAuthScheme;
+  /**
+   * The model this deployment runs when a job does not name one.
+   *
+   * Absent means Claude Code's default. A job's own choice wins over this.
+   */
+  model?: string;
 }

@@ -62,6 +62,8 @@ Options for run:
   --repo <url>      repository to work on (default: worker's REPO_URL)
   --base <branch>   base branch (default: worker's DEFAULT_BASE_BRANCH)
   --branch <name>   work on this branch instead of a generated one
+  --model <name>    model for this job: opus | sonnet | haiku | a model id
+                    (default: the worker's CLAUDE_MODEL, else Claude Code's own)
   --install <cmd>   install command for this job (see below)
   --lint <cmd>      lint command for this job
   --test <cmd>      test command for this job
@@ -175,6 +177,7 @@ const RUN_OPTIONS = {
   keepSandbox: '--keep',
   push: '--push',
   pullRequest: '--pr',
+  model: '--model',
 };
 
 /** The same for a follow-up turn, which inherits the repository and branch. */
@@ -185,6 +188,10 @@ const CONTINUE_OPTIONS = {
   keepSandbox: '--keep',
   push: '--push',
   pullRequest: '--pr',
+  // A turn may switch models — a cheap follow-up on work a larger model did, or
+  // the reverse when the first answer was not good enough. Unspecified keeps the
+  // model the previous turn ran.
+  model: '--model',
 };
 
 /**
@@ -203,7 +210,7 @@ function commandsFrom(opts) {
 async function cmdRun(client, args) {
   const opts = parseArgs(args, {
     flags: ['no-follow', 'skip-checks', 'push', 'pr', 'keep', 'json'],
-    values: ['base', 'repo', 'branch', 'install', 'lint', 'test', 'build'],
+    values: ['base', 'repo', 'branch', 'model', 'install', 'lint', 'test', 'build'],
   });
   const prompt = opts._.join(' ').trim();
   if (!prompt) fail('a prompt is required\n\n' + USAGE);
@@ -217,6 +224,9 @@ async function cmdRun(client, args) {
     repo: opts.repo,
     baseBranch: opts.base,
     branch: opts.branch,
+    // Absent leaves the choice to the deployment, which is the right default:
+    // most jobs do not care, and the ones that do care a lot.
+    model: opts.model,
     commands: commandsFrom(opts),
     skipChecks: opts['skip-checks'],
     push: opts.push,
@@ -284,7 +294,7 @@ function follow(client, id, echo) {
 async function cmdContinue(client, args) {
   const opts = parseArgs(args, {
     flags: ['no-follow', 'skip-checks', 'push', 'pr', 'keep', 'json'],
-    values: ['install', 'lint', 'test', 'build'],
+    values: ['model', 'install', 'lint', 'test', 'build'],
   });
   const [previousId, ...rest] = opts._;
   if (!previousId) fail('a job id is required: remote-claude continue <job-id> "<reply>"');
@@ -293,6 +303,7 @@ async function cmdContinue(client, args) {
 
   const created = await client.continueJob(previousId, {
     prompt,
+    model: opts.model,
     commands: commandsFrom(opts),
     skipChecks: opts['skip-checks'],
     push: opts.push,
@@ -547,9 +558,15 @@ async function cmdHealth(client, args) {
   const ok = await client.health();
   log(`worker: ${ok ? 'ok' : 'unhealthy'}`);
   if (args.includes('--auth')) {
-    log('probing Claude subscription auth (starts a container, ~30s) …');
+    log('probing Claude auth (starts a container, ~30s) …');
     const auth = await client.checkAuth();
     log(`claude auth: ${auth.ok ? 'ok' : 'FAILED'} (mode=${auth.authMode}, scheme=${auth.authScheme})`);
+    // `reason` is present exactly when there was nothing to probe — no
+    // credential, or two of them — and then there is no model to report either.
+    if (auth.reason) log(`  ${auth.reason}`);
+    // Which credential answered is the point of asking, and the model beside it
+    // is the other thing about a deployment nothing else reports.
+    else log(`model:       ${auth.model ?? 'claude-code default'}`);
     if (auth.output) log(`  ${auth.output}`);
     return auth.ok ? 0 : 1;
   }
@@ -562,6 +579,9 @@ function printSummary(task, id) {
   log('');
   log(`status   ${task.status}`);
   if (task.error) log(`error    ${task.error}`);
+  // Only when this job chose one. Absent means the deployment's, which is a
+  // question about the deployment rather than about this job — `health --auth`.
+  if (task.model) log(`model    ${task.model}`);
   if (task.usage) {
     const cost = typeof task.usage.costUsd === 'number' ? `, $${task.usage.costUsd.toFixed(4)}` : '';
     const turns = task.usage.turns ? `, ${task.usage.turns} turns` : '';

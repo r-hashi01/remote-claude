@@ -33,6 +33,7 @@ function policy(overrides: Partial<ExecutorPolicy> = {}): ExecutorPolicy {
     retentionMs: 7 * 24 * 60 * 60 * 1000,
     sleepAfter: '2m',
     commands: { install: '', lint: '', test: '', build: '' },
+    claudeAuthScheme: 'subscription',
     ...overrides,
   };
 }
@@ -266,6 +267,53 @@ describe('starting queued work', () => {
       sandboxes.get(`rc-${job.id}`).files.get(`${STATE_DIR}/job.json`) as string
     );
     expect(written.commands).toEqual(commands);
+  });
+
+  /**
+   * The runner has no other source for either of these. The scheme decides which
+   * credential variables it clears and checks — getting it wrong fails a
+   * correctly configured job, or bills an account nobody chose — and the model
+   * decides what did the work.
+   */
+  test('tells the runner which credential and which model', async () => {
+    const { service, sandboxes } = harness({
+      policy: policy({ claudeAuthScheme: 'api-key', model: 'claude-opus-4-5' }),
+    });
+
+    const job = await service.createJob({ prompt: 'x' });
+    await service.tick();
+
+    const written = JSON.parse(
+      sandboxes.get(`rc-${job.id}`).files.get(`${STATE_DIR}/job.json`) as string
+    );
+    expect(written.authScheme).toBe('api-key');
+    expect(written.model).toBe('claude-opus-4-5');
+  });
+
+  test('a job’s own model wins over the deployment’s', async () => {
+    const { service, sandboxes } = harness({ policy: policy({ model: 'claude-opus-4-5' }) });
+
+    const job = await service.createJob({ prompt: 'x', model: 'haiku' });
+    await service.tick();
+
+    const written = JSON.parse(
+      sandboxes.get(`rc-${job.id}`).files.get(`${STATE_DIR}/job.json`) as string
+    );
+    expect(written.model).toBe('haiku');
+  });
+
+  // Absent rather than a name written down here: the runner passes no `--model`,
+  // and Claude Code's own default applies.
+  test('no model anywhere leaves the field out', async () => {
+    const { service, sandboxes } = harness();
+
+    const job = await service.createJob({ prompt: 'x' });
+    await service.tick();
+
+    const written = JSON.parse(
+      sandboxes.get(`rc-${job.id}`).files.get(`${STATE_DIR}/job.json`) as string
+    );
+    expect(written.model).toBeUndefined();
   });
 
   test('starts no more at once than the deployment allows', async () => {

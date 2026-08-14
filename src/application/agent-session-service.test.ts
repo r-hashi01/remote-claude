@@ -28,6 +28,7 @@ function policy(overrides: Partial<ExecutorPolicy> = {}): ExecutorPolicy {
     retentionMs: 7 * 24 * 60 * 60 * 1000,
     sleepAfter: '2m',
     commands: { install: '', lint: '', test: '', build: '' },
+    claudeAuthScheme: 'subscription',
     ...overrides,
   };
 }

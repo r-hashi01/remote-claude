@@ -55,6 +55,37 @@ describe('creating a job', () => {
   });
 });
 
+describe('the model a job runs', () => {
+  test('by default it names none, and runs the deployment’s', () => {
+    const job = Job.create(BASE);
+    expect(job.model).toBeUndefined();
+    expect(job.resolveModel('claude-opus-4-5')).toBe('claude-opus-4-5');
+  });
+
+  test('its own choice wins over the deployment’s', () => {
+    const job = Job.create({ ...BASE, model: 'haiku' });
+    expect(job.model).toBe('haiku');
+    expect(job.resolveModel('claude-opus-4-5')).toBe('haiku');
+  });
+
+  // Neither side having chosen is a real answer: Claude Code's own default,
+  // which moves as models are released.
+  test('nothing chosen anywhere leaves the choice to Claude Code', () => {
+    expect(Job.create(BASE).resolveModel(undefined)).toBeUndefined();
+  });
+
+  test('a blank model is not a choice', () => {
+    expect(Job.create({ ...BASE, model: '  ' }).model).toBeUndefined();
+    expect(Job.create({ ...BASE, model: '  ' }).toRecord()).not.toHaveProperty('model');
+  });
+
+  // Refused where a caller is still waiting, rather than in a container twenty
+  // seconds later.
+  test('refuses something that is not a model name', () => {
+    expect(() => Job.create({ ...BASE, model: 'the fast one' })).toThrow(/not a model name/);
+  });
+});
+
 describe('the commands a job runs', () => {
   test('by default it brings none of its own', () => {
     expect(Job.create(BASE).commandOverrides).toEqual({});
@@ -229,6 +260,19 @@ describe('continuing a job', () => {
 
     expect(next.options.push).toBe(true);
     expect(next.commandOverrides).toEqual({ install: 'npm ci', test: 'npm test -- --run' });
+  });
+
+  /**
+   * A follow-up answers the question the previous turn stopped on, so switching
+   * models silently would change who is answering it. Naming one is still
+   * allowed: a cheap follow-up on expensive work, or the reverse when the first
+   * answer was not good enough, are both reasonable.
+   */
+  test('keeps the model the previous turn ran, unless this turn names another', () => {
+    const previous = Job.fromRecord({ ...finished().toRecord(), model: 'claude-opus-4-5' });
+
+    expect(Job.continuing(previous, input).model).toBe('claude-opus-4-5');
+    expect(Job.continuing(previous, { ...input, model: 'haiku' }).model).toBe('haiku');
   });
 
   test('refuses a job that has not finished', () => {
