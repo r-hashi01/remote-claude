@@ -49,6 +49,7 @@ remote-claude — run Claude Code on Cloudflare, not on your Mac
                                         answer a finished job and carry on
   remote-claude status <job-id>        show a job's status and summary
   remote-claude logs <job-id> [-f]     print logs (-f/--follow to tail)
+  remote-claude terminal <job-id>      watch what the commands print, live
   remote-claude diff <job-id>          print the unified diff
   remote-claude apply <job-id>         apply that diff to the local worktree
   remote-claude cancel <job-id>        cancel a running job
@@ -316,6 +317,31 @@ async function cmdContinue(client, args) {
   else process.stdout.write(JSON.stringify(final) + '\n');
 
   return final.status === 'completed' ? 0 : 1;
+}
+
+/**
+ * Watch a run the way you would watch a build in a terminal you left open.
+ *
+ * The other half of `logs`. That one prints parsed lines and answers where a run
+ * is up to; this prints the bytes the commands produced, as they produce them,
+ * and answers what is happening. Every run that went wrong turned out to be
+ * legible only here.
+ */
+async function cmdTerminal(client, args) {
+  const opts = parseArgs(args, { flags: [], values: ['from'] });
+  const id = opts._[0];
+  if (!id) fail('a job id is required');
+
+  const outcome = await client.followOutput(id, {
+    ...(opts.from === undefined ? {} : { offset: Number.parseInt(opts.from, 10) || 0 }),
+    onStart: (offset, skipped) =>
+      log(skipped > 0 ? `— joined at byte ${offset}, ${skipped} earlier bytes skipped —` : ''),
+    onChunk: (text) => process.stdout.write(text),
+  });
+
+  log('');
+  log(`job ${outcome.status} (${outcome.offset} bytes)`);
+  return outcome.status === 'completed' ? 0 : 1;
 }
 
 async function cmdStatus(client, args) {
@@ -618,6 +644,7 @@ const COMMANDS = {
   continue: cmdContinue,
   status: cmdStatus,
   logs: cmdLogs,
+  terminal: cmdTerminal,
   ui: cmdUi,
   diff: cmdDiff,
   apply: cmdApply,

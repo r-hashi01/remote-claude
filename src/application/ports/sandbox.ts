@@ -88,6 +88,23 @@ export interface SandboxSession {
   readFile(path: string): Promise<string | null>;
 
   /**
+   * A window of a file, by byte offset, and how long that file now is.
+   *
+   * For following output while it is being produced. `readFile` cannot do it:
+   * whole-file reads grow with the run, and re-reading megabytes every few
+   * hundred milliseconds to show the last few hundred bytes is the wrong shape.
+   *
+   * The size comes back with the window because a caller deciding where to start
+   * — the last N kilobytes, say — cannot know that without it, and asking twice
+   * would be asking about two different moments.
+   */
+  readWindow(
+    path: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ chunk: string; size: number }>;
+
+  /**
    * Start a long-running process the platform owns.
    *
    * Distinct from `exec`, which runs a command and waits. This is for the runner,

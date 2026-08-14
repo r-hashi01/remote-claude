@@ -138,6 +138,35 @@ class CloudflareSandboxSession implements SandboxSession {
     }
   }
 
+  /**
+   * A window of a file, and its current length.
+   *
+   * One command, because two would describe two moments: `wc -c` first on its own
+   * line, then the bytes. A file that does not exist yet reports length zero
+   * rather than failing — the runner creates it when it first has something to
+   * say, and a watcher may well be attached before that.
+   */
+  async readWindow(
+    path: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ chunk: string; size: number }> {
+    const quoted = `'${path.replaceAll("'", "'\\''")}'`;
+    const result = await this.sandbox.exec(
+      `f=${quoted}; if [ ! -f "$f" ]; then echo 0; else wc -c < "$f" | tr -d ' '; ` +
+        `tail -c +${Math.max(0, Math.floor(offset)) + 1} "$f" | head -c ${Math.max(0, Math.floor(limit))}; fi`
+    );
+
+    const stdout = result.stdout ?? '';
+    const firstLine = stdout.indexOf('\n');
+    if (firstLine === -1) return { chunk: '', size: 0 };
+
+    return {
+      size: Number.parseInt(stdout.slice(0, firstLine), 10) || 0,
+      chunk: stdout.slice(firstLine + 1),
+    };
+  }
+
   async killAll(): Promise<void> {
     await this.sandbox.killAllProcesses();
   }

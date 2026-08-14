@@ -51,6 +51,7 @@ remote-claude run "<prompt>" [opts]   # the same, explicitly
 remote-claude continue <job-id> "<reply>"   # answer a finished job, same conversation
 remote-claude status <job-id>
 remote-claude logs <job-id> [-f]
+remote-claude terminal <job-id>       # watch what the commands print, live
 remote-claude diff <job-id>
 remote-claude apply <job-id>          # apply the patch to the working tree
 remote-claude cancel <job-id>
@@ -182,6 +183,46 @@ so the work exists, and the log says to open one by hand.
 Both need the deployment to allow pushing *and* the credential to permit it; see
 [Operating it](operating.md#pushing-and-pull-requests). Missing either is a 400
 at submission, naming which one.
+
+## Watching a run
+
+Two views, answering different questions. `logs` gives parsed lines — the step
+markers, and which stream each line came from — and answers **where a run is up
+to**. The terminal gives the bytes the commands produced, unsplit and
+untruncated, and answers **what is happening**.
+
+```bash
+remote-claude terminal <job-id>              # follow it, live
+remote-claude terminal <job-id> --from 4096  # resume from a byte offset
+```
+
+```ts
+await rc.followOutput(job.id, {
+  onChunk: (text, offset) => write(text),   // `offset` is what to resume from
+  onStart: (offset, skipped) => …,          // where this stream began
+});
+```
+
+Over SSE, at `GET /jobs/:id/output/stream?offset=N`, with the same bearer token
+as everything else. Events are `start`, `chunk`, `idle`, `end` and `error`; `end`
+carries the job's status, so a finished run and a dropped connection are
+distinguishable. A reader who arrives late starts near the end and is told how
+much was skipped.
+
+Three things it deliberately is not ([ADR 0012](adr/0012-two-views-of-a-running-job.md)):
+
+- **No input channel.** Not now and not later. What you want to change, say in
+  the conversation and continue the job.
+- **No ANSI.** Commands run without a TTY, so tools emit no colour and redraw
+  nothing. The bytes are what they printed.
+- **Not a record.** It lives as long as the container. The parsed log outlives
+  the job; this does not.
+
+The offset you are given is **what you have been shown**, not what the executor
+read: a tail is withheld while more can arrive, so that a credential falling
+across the end of a window is masked on the read that completes it rather than
+half-sent. Resume from the offset in the last `chunk`, never from a count of
+your own.
 
 ## Continuing a job
 

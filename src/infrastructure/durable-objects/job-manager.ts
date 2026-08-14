@@ -119,6 +119,15 @@ export class JobManager extends DurableObject<Env> {
     return this.service.getLogs(id, since, limit);
   }
 
+  /** A window of what the job's commands printed. See JobService.readOutput. */
+  async readOutput(
+    id: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ text: string; nextOffset: number; size: number; done: boolean }> {
+    return this.service.readOutput(id, offset, limit);
+  }
+
   async getPatch(id: string): Promise<string | null> {
     return this.service.getPatch(id);
   }

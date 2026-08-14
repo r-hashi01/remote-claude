@@ -1319,3 +1319,76 @@ describe('the moment a job reports itself finished', () => {
     expect(patchStored, 'so the diff can be fetched').toBe(true);
   });
 });
+
+/**
+ * Following the output of a run that is still going.
+ *
+ * The parsed log answers "where is it up to". This answers "what is happening" —
+ * the bytes as the commands produced them, which is where every run that went
+ * wrong turned out to be legible: twenty minutes of a loop, an ECONNRESET at
+ * install, four minutes of quiet that could have been either.
+ */
+describe('reading a job\'s terminal output', () => {
+  /** A job whose runner is up, which is when there is output to follow. */
+  async function running(): Promise<Harness & { jobId: string }> {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    return { ...h, jobId: job.id };
+  }
+
+  async function withOutput(body: string): Promise<Harness & { jobId: string }> {
+    const h = await running();
+    h.sandboxes.get(`rc-${h.jobId}`).files.set(`${STATE_DIR}/output.raw`, body);
+    return h;
+  }
+
+  test('reads from an offset and says where to continue', async () => {
+    const h = await withOutput('▶ install\nadded 101 packages\n');
+
+    const window = await h.service.readOutput(h.jobId, 0, 1_000);
+
+    // Withheld against a secret straddling the end, because more may arrive.
+    expect(window.text).toBe('');
+    expect(window.nextOffset).toBe(0);
+    expect(window.size).toBe('▶ install\nadded 101 packages\n'.length);
+    expect(window.done).toBe(false);
+  });
+
+  test('releases everything once the job can produce no more', async () => {
+    const h = await withOutput('▶ install\nadded 101 packages\n');
+    const job = h.jobs.load(h.jobId)!;
+    job.settle('completed', h.clock.now());
+    h.jobs.save(job);
+
+    const window = await h.service.readOutput(h.jobId, 0, 1_000);
+
+    expect(window.text).toBe('▶ install\nadded 101 packages\n');
+    expect(window.done).toBe(true);
+  });
+
+  test('masks a secret the executor holds', async () => {
+    const h = await withOutput('token=hunter2 and more\n'.padEnd(600, '.'));
+    const job = h.jobs.load(h.jobId)!;
+    job.settle('completed', h.clock.now());
+    h.jobs.save(job);
+
+    const window = await h.service.readOutput(h.jobId, 0, 1_000);
+
+    expect(window.text).toContain('token=[redacted]');
+    expect(window.text).not.toContain('hunter2');
+  });
+
+  test('is empty, not an error, before the runner has written anything', async () => {
+    const h = await running();
+
+    const window = await h.service.readOutput(h.jobId, 0, 1_000);
+
+    expect(window).toMatchObject({ text: '', nextOffset: 0, size: 0, done: false });
+  });
+
+  test('has nothing to say about a job it does not know', async () => {
+    const h = harness();
+    await expect(h.service.readOutput('no-such-job', 0, 100)).rejects.toThrow(/no-such-job/);
+  });
+});

@@ -387,6 +387,15 @@ export class FakeSandbox implements SandboxSession {
     return this.files.get(path) ?? null;
   }
 
+  async readWindow(
+    path: string,
+    offset: number,
+    limit: number
+  ): Promise<{ chunk: string; size: number }> {
+    const body = this.files.get(path) ?? '';
+    return { chunk: body.slice(offset, offset + limit), size: body.length };
+  }
+
   /** Processes the platform is holding, by the id the caller chose. */
   readonly processes = new Map<string, { alive: boolean; output: string }>();
   /** Set to make starting one fail, the way a busy platform does. */
