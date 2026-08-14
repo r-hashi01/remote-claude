@@ -338,12 +338,21 @@ async function main() {
   //
   // Now the exit code means what the step means. Names are printed, never
   // values.
+  //
+  // And the line says which credential it looked for. "no API-key credential
+  // present" was read as "the GitHub App credential did not arrive" by somebody
+  // who had every reason to think so: it named no key, and did not say that
+  // absence is the desired result. A check nobody can interpret is a check that
+  // will be interpreted wrongly.
   const check = await run(
     'verify-no-api-key',
     'leaked=""; for v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; do ' +
       '[ -n "${!v}" ] && leaked="$leaked $v"; done; ' +
-      'if [ -n "$leaked" ]; then echo "present:$leaked"; exit 1; fi; ' +
-      'echo "no API-key credential present"',
+      'if [ -n "$leaked" ]; then ' +
+      'echo "an Anthropic API key IS present in the container:$leaked — this environment ' +
+      'must use the subscription credential only"; exit 1; fi; ' +
+      'echo "checked ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN: neither is set in the ' +
+      'container, so Claude Code will use the subscription credential (ADR 0002)"',
     { allowFailure: true }
   );
   if (!check.success) {
