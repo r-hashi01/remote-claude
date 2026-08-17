@@ -1,5 +1,7 @@
 import type { AuthProbe, SandboxLedger } from '../domain/executor.js';
-import type { ContinueJob, JobRecord, JobSummary, LogPage, StartJob } from '../domain/job.js';
+import type { ContinueJob, JobRecord, JobSummary, LogPage, StartJob,
+  OutputWindow,
+} from '../domain/job.js';
 
 export type { AuthProbe, SandboxLedger, SandboxLedgerEntry } from '../domain/executor.js';
 
@@ -38,6 +40,20 @@ export interface JobGateway {
    * real base branch between turns do not move it and do not show up here.
    */
   getDiff(jobId: string): Promise<string | null>;
+
+  /**
+   * One window of what the job's commands printed, by byte offset.
+   *
+   * The single-read counterpart to `followOutput`. For rendering once — a server
+   * that answers a page rather than holding a stream open, or a check on what a run
+   * said without watching it.
+   *
+   * `nextOffset` is what you have been *shown*, not what the executor read: it
+   * withholds a tail while more can arrive, so that a credential falling across the
+   * end of a window is masked on the read that completes it. Pass it back to
+   * continue; do not count bytes yourself.
+   */
+  output(jobId: string, offset: number, limit?: number): Promise<OutputWindow>;
   sandboxes(): Promise<SandboxLedger>;
 }
 
