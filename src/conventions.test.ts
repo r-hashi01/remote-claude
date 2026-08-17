@@ -16,7 +16,14 @@ import { unsetForeignCredentials } from './domain/agent/command';
  */
 
 const sources = globSync('src/**/*.ts', { cwd: process.cwd() }).filter(
-  (path) => !path.includes('.test.') && !path.endsWith('testing.ts')
+  (path) =>
+    !path.includes('.test.') &&
+    !path.endsWith('testing.ts') &&
+    // Generated: the container's runner, embedded as a string. Its throws are the
+    // runner's own and never reach the HTTP layer as thrown values — they arrive
+    // as a job's `error` field. Reading them as if they did made this check fail
+    // for a retry added inside the container.
+    !path.endsWith('runner-source.ts')
 );
 
 const read = (path: string) => readFileSync(path, 'utf8');

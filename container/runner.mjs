@@ -85,9 +85,9 @@ function write(name, data) {
  * untruncated.
  *
  * Watching a run is the case that has no answer today. A run that spent twenty
- * minutes looping, one that died at install with ECONNRESET, one that went quiet
- * for four minutes: each was legible only from the output, and only after the
- * fact.
+ * minutes looping, one that died at install with ECONNRESET — which is now retried
+ * rather than fatal — one that went quiet for four minutes: each was legible only
+ * from the output, and only after the fact.
  *
  * Bounded, and it says so when it stops. An unbounded file here is a job's memory
  * consumption decided by how chatty its build is.
@@ -342,8 +342,15 @@ function run(name, command, options = {}) {
         durationMs: Date.now() - startedAt,
         output: truncate(redact(output), options.maxOutput ?? MAX_STEP_OUTPUT),
       };
-      steps.push(step);
+      // `record: false` leaves the decision to a caller that may run this again —
+      // a step is one entry in the pipeline, however many attempts it took.
+      if (options.record !== false) steps.push(step);
       log('system', `${step.success ? '✔' : '✖'} ${name} (exit ${step.exitCode}, ${step.durationMs}ms)`);
+
+      if (options.record === false) {
+        resolve(step);
+        return;
+      }
 
       if (!step.success && !options.allowFailure) {
         reject(new Error(`step "${name}" failed with exit code ${step.exitCode}`));
@@ -357,6 +364,151 @@ function run(name, command, options = {}) {
       reject(error);
     });
   });
+}
+
+/**
+ * Failures that are the network's, not the job's.
+ *
+ * A job died at `install` with ECONNRESET, which is nobody's decision and the
+ * worst possible timing: install runs before the agent, so the job failed without
+ * a conversation — and a job with no conversation cannot be continued either. The
+ * whole run was lost to a reset socket.
+ *
+ * npm retries its own fetches twice; anything reaching here has already outlived
+ * that. Matching on the output rather than the exit code because the exit code of
+ * a failed `npm ci` says only that it failed.
+ */
+const TRANSIENT_NETWORK = [
+  /ECONNRESET/,
+  /ETIMEDOUT/,
+  /ESOCKETTIMEDOUT/,
+  /ERR_SOCKET_TIMEOUT/,
+  /EAI_AGAIN/,
+  /ENETUNREACH/,
+  /EHOSTUNREACH/,
+  /ECONNREFUSED/,
+  /socket hang up/i,
+  /network (?:timeout|error)/i,
+  /request to \S+ failed/i,
+  /\b(?:429|502|503|504)\b.*(?:registry|gateway|unavailable|too many)/i,
+];
+
+function transientNetworkFailure(output) {
+  const matched = TRANSIENT_NETWORK.find((pattern) => pattern.test(output));
+  return matched ? (output.match(matched)?.[0] ?? 'a network failure').slice(0, 60) : null;
+}
+
+/** How long to wait before trying again. Short, then long enough to matter. */
+const RETRY_BACKOFF_MS = [2_000, 8_000];
+
+/**
+ * How to fetch, per attempt, when the failure is throughput rather than luck.
+ *
+ * The evidence said so. Five failures, all mid-transfer, all after a long stretch
+ * with no output — 75s, 105s — and in two flavours: the connection cut
+ * (ECONNRESET) or nothing coming back (ETIMEDOUT). Small packages never failed;
+ * they report progress before the cliff. And the successes took 56s, 78s, 111s,
+ * which is not a healthy distribution — it is the same transfer finishing just
+ * inside the limit.
+ *
+ * npm opens fifteen sockets at once by default. Through a narrow path that is
+ * fifteen streams each too slow to keep its socket alive, so the timeouts fire on
+ * a connection that is working, only slowly. Retrying that shape reaches the same
+ * cliff; the shape is what has to change.
+ *
+ * Set through the environment rather than by editing the command, because the
+ * command belongs to the deployment or the job. npm reads `npm_config_*`; anything
+ * that is not npm ignores them.
+ */
+const FETCH_SHAPES = [
+  { npm_config_maxsockets: '8' },
+  { npm_config_maxsockets: '3' },
+  { npm_config_maxsockets: '1' },
+];
+
+/** Applies to every attempt: patience is not the variable being tested. */
+const FETCH_PATIENCE = {
+  // Five minutes by default, which is the whole request. A slow transfer needs
+  // longer than a fast one, and waiting is cheaper than starting over.
+  npm_config_fetch_timeout: '900000',
+  npm_config_fetch_retries: '4',
+  npm_config_fetch_retry_maxtimeout: '120000',
+  // Progress on a pipe is off, which is why the log went quiet for 105 seconds.
+  // This does not turn it on — it says what npm is doing between fetches.
+  npm_config_loglevel: 'http',
+};
+
+function fetchShape(attempt) {
+  return {
+    ...FETCH_PATIENCE,
+    ...(FETCH_SHAPES[Math.min(attempt - 1, FETCH_SHAPES.length - 1)] ?? {}),
+  };
+}
+
+/**
+ * Run a step, and run it again while its failure looks like the network's.
+ *
+ * Deliberately narrow. A command that fails on its own terms fails on the first
+ * attempt: retrying `npm ci` because a lockfile disagrees would waste two minutes
+ * to reach the same conclusion, and retrying anything with side effects would be
+ * worse than that.
+ *
+ * Attempts are not hidden. One step is recorded, because a step is a stage of the
+ * pipeline rather than a count of tries, and what the earlier attempts printed is
+ * kept in its output — a run that took three goes to install should look like one.
+ */
+async function runWithRetries(name, command, options = {}) {
+  const attempts = options.attempts ?? RETRY_BACKOFF_MS.length + 1;
+  const earlier = [];
+
+  // The attempts share the step's budget rather than each taking all of it. A
+  // step may run for the whole job by default, so three attempts of that would
+  // reach the job's own deadline — and then the run reports "job exceeded
+  // 1800000ms" instead of which step could not finish, which is the wrong sentence
+  // to be handed. Installs that succeed take one or two minutes; a third of the
+  // budget is generous against that and still leaves the agent its time.
+  const perAttempt = options.timeoutMs
+    ? Math.floor(options.timeoutMs / attempts)
+    : undefined;
+
+  for (let attempt = 1; ; attempt += 1) {
+    const shape = options.reshapeFetches ? fetchShape(attempt) : {};
+    const step = await run(name, command, {
+      ...options,
+      ...(perAttempt ? { timeoutMs: perAttempt } : {}),
+      env: { ...(options.env ?? {}), ...shape },
+      record: false,
+    });
+    const reason = step.success ? null : transientNetworkFailure(step.output);
+    const lastAttempt = attempt >= attempts;
+
+    if (step.success || !reason || lastAttempt) {
+      if (earlier.length > 0) {
+        step.output = truncate(
+          `${earlier.join('\n')}\n--- attempt ${attempt} ---\n${step.output}`,
+          options.maxOutput ?? MAX_STEP_OUTPUT
+        );
+      }
+      steps.push(step);
+      if (!step.success && !options.allowFailure) {
+        const gaveUp = reason ? ` after ${attempt} attempts (${reason})` : '';
+        throw new Error(`step "${name}" failed with exit code ${step.exitCode}${gaveUp}`);
+      }
+      return step;
+    }
+
+    const wait = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
+    const next = options.reshapeFetches
+      ? `, with ${fetchShape(attempt + 1).npm_config_maxsockets} parallel fetches instead of ${shape.npm_config_maxsockets}`
+      : '';
+    log(
+      'system',
+      `⟳ ${name}: ${reason} — the network, not the job. Retrying in ${wait / 1000}s` +
+        ` (attempt ${attempt + 1} of ${attempts})${next}`
+    );
+    earlier.push(`--- attempt ${attempt} (exit ${step.exitCode}, ${reason}) ---\n${step.output}`);
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
 }
 
 function skip(name, reason) {
@@ -498,7 +650,16 @@ async function main() {
   );
 
   setStatus('installing');
-  if (commands.install) await run('install', commands.install, { timeoutMs: job.stepTimeoutMs });
+  // Retried, because a reset socket here loses a whole run before the agent has
+  // said anything. The checks below are not: they run after the work exists, so
+  // their failure costs a report rather than the job.
+  if (commands.install) {
+    await runWithRetries('install', commands.install, {
+      timeoutMs: job.stepTimeoutMs,
+      // Fewer parallel fetches each time, because what failed was throughput.
+      reshapeFetches: true,
+    });
+  }
   else skip('install', 'INSTALL_COMMAND is not configured');
 
   setStatus('running');
