@@ -524,3 +524,55 @@ describe('the runner and the Worker clear the same credentials', () => {
     }
   });
 });
+
+/**
+ * What the wire carries, and what the client says it carries.
+ *
+ * `GET /jobs/:id` answers with the executor's whole record, so every field on it is
+ * visible to a consumer whether or not the client describes it. Three of them went
+ * undescribed for a while, and one mattered: `workspace` is how a caller can tell
+ * that a job is continuable *before* asking, and spindle was asking and handling the
+ * refusal because nothing said it could look.
+ *
+ * The three left out are left out on purpose. They are the executor's own plumbing
+ * for resuming — the id passed to `--resume` and the snapshot a continuation
+ * restores from — and a consumer that reads them is depending on how continuation is
+ * implemented rather than on what it does.
+ */
+describe('the client describes the record the wire carries', () => {
+  /** Deliberately not described, with the reason kept next to the exclusion. */
+  const EXECUTOR_PLUMBING = new Set([
+    // The Claude Code session id. What `--resume` is given; meaningless elsewhere.
+    'claudeSessionId',
+    // Where a continuation's workspace came from. `workspace` is the field a caller
+    // wants; this is its counterpart on the way in.
+    'restoreFrom',
+    // The session a continuation resumes. Same reason as claudeSessionId.
+    'resumeSession',
+  ]);
+
+  function fieldsOf(source: string, interfaceName: string): string[] {
+    const body = new RegExp(`export interface ${interfaceName} \\{([\\s\\S]*?)\\n\\}`).exec(source);
+    expect(body, `no interface ${interfaceName}`).not.toBeNull();
+    return [...withoutComments(body?.[1] ?? '').matchAll(/^\s{2}([a-zA-Z]+)\??:/gm)].map(
+      (match) => match[1] as string
+    );
+  }
+
+  test('every field of a job record is described or deliberately internal', () => {
+    const onTheWire = fieldsOf(read('src/domain/job/record.ts'), 'JobRecord');
+    const described = new Set(fieldsOf(read('sdk/src/domain/job.ts'), 'JobRecord'));
+
+    const missing = onTheWire.filter(
+      (field) => !described.has(field) && !EXECUTOR_PLUMBING.has(field)
+    );
+    expect(missing).toEqual([]);
+  });
+
+  // The exclusions are a list somebody has to keep honest: a field that stops
+  // existing should not sit here implying it does.
+  test('nothing is excluded that the executor no longer has', () => {
+    const onTheWire = new Set(fieldsOf(read('src/domain/job/record.ts'), 'JobRecord'));
+    expect([...EXECUTOR_PLUMBING].filter((field) => !onTheWire.has(field))).toEqual([]);
+  });
+});

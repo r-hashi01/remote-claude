@@ -157,6 +157,39 @@ export interface JobRecord {
    * still pushed in that case, so absence here is not absence of a result.
    */
   pullRequestUrl?: string;
+  /**
+   * Whether this job's tree and conversation were kept, and so whether
+   * `continueJob` can work on it.
+   *
+   * Present from the moment the job reports itself finished — the executor stores
+   * the workspace before writing the terminal status, precisely so that a caller
+   * who waits for a job and then answers it is not told there is nothing to
+   * continue. Absent means a follow-up turn will be refused: no bucket is bound on
+   * that deployment, the job stopped before the agent ran, or the retention window
+   * has passed.
+   *
+   * Worth reading before offering somebody a reply box. The alternative is asking
+   * and handling the refusal, which works but tells the person after they typed.
+   *
+   * Opaque: only the executor that produced it may interpret the contents. The
+   * shape mirrors the executor's, which is an index signature narrowed to what
+   * survives a Durable Object round trip — so `provider` is the only key promised,
+   * and reading anything else means depending on which provider answered.
+   */
+  workspace?: {
+    provider: string;
+    [detail: string]: string | number | boolean | null | undefined;
+  };
+  /**
+   * What the runner last said it was doing: `installing`, `running`, `checking`,
+   * and so on.
+   *
+   * The executor's own word for where a run is up to, remembered rather than read
+   * live — so it still says something after the container is gone. Free-form on
+   * purpose: these are the pipeline's names and adding one is not a breaking
+   * change, so display it rather than branching on it.
+   */
+  phase?: string;
 }
 
 /**
@@ -250,6 +283,24 @@ export interface LogLine {
   ts: number;
   stream: LogStream;
   line: string;
+}
+
+/**
+ * A window of a job's raw output.
+ *
+ * Bytes as the commands produced them — unsplit and untruncated, which is the
+ * difference from `LogPage`. That answers where a run is up to; this answers what is
+ * happening.
+ */
+export interface OutputWindow {
+  /** The output, already redacted. Empty when nothing new has arrived. */
+  text: string;
+  /** Where to read from next. What you were shown, not what was read. */
+  nextOffset: number;
+  /** How many bytes the file holds now, for deciding where to start. */
+  size: number;
+  /** Whether the job can produce no more. */
+  done: boolean;
 }
 
 export interface LogPage {

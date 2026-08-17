@@ -13,8 +13,10 @@ import type {
   JobSummary,
   LogLine,
   LogPage,
+  OutputWindow,
   StartJob,
 } from '../domain/job.js';
+import { isTerminal } from '../domain/job.js';
 import type { AuthProbe, JobGateway, SandboxLedger } from './ports.js';
 
 export class FakeJobGateway implements JobGateway {
@@ -83,6 +85,23 @@ export class FakeJobGateway implements JobGateway {
     this.calls.push(`logs:${since}`);
     const logs = this.lines.filter((line) => line.seq > since);
     return { logs, nextSince: logs.at(-1)?.seq ?? since };
+  }
+
+  /** What the commands printed. A test appends to it; reads window it by offset. */
+  outputText = '';
+
+  async output(_jobId: string, offset: number, limit = 65_536): Promise<OutputWindow> {
+    this.calls.push('output');
+    const bytes = new TextEncoder().encode(this.outputText);
+    const window = bytes.slice(offset, offset + limit);
+    return {
+      text: new TextDecoder().decode(window),
+      nextOffset: offset + window.length,
+      size: bytes.length,
+      // Terminal means no more bytes can arrive, which is what makes the tail
+      // safe to release — the same rule the executor applies.
+      done: isTerminal(this.states.at(-1)?.status ?? 'running'),
+    };
   }
 
   async getDiff(_jobId: string): Promise<string | null> {

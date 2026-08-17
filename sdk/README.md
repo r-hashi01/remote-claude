@@ -78,6 +78,35 @@ knowing before you build on it:
 There is no input channel, and there will not be one. What you want to change,
 say in the conversation and continue the job.
 
+For rendering once rather than watching — a server answering a page, or a check on
+what a run said — `getOutput(id, offset)` returns one window and the offset to
+continue from. Same rule about that offset: it is what you were shown.
+
+## Whether a job can be continued
+
+`continueJob` is refused when there is nothing to resume, and **the record says so
+before you ask**:
+
+```ts
+const job = await rc.getJob(id);
+if (job.workspace) {
+  // A follow-up turn will work: the tree and the conversation were kept.
+}
+```
+
+`workspace` is present from the moment a job reports itself finished — the executor
+stores it before writing the terminal status, precisely so that answering a job that
+has just finished is not refused. Absent means a follow-up turn will be: no bucket is
+bound on that deployment, the job stopped before the agent ran, or the retention
+window has passed.
+
+Worth reading before offering somebody a reply box, rather than asking and handling
+the refusal after they have typed.
+
+`phase` is the executor's own word for where a run is up to — `installing`,
+`running`, `checking`. Free-form on purpose: they are the pipeline's names, adding one
+is not a breaking change, so display it rather than branching on it.
+
 ## Another repository
 
 A deployment has one configured repository and will run against others when it
@@ -115,6 +144,7 @@ await rc.listJobs(1); // /health is unauthenticated, so this is what proves the 
 | `cancelJob(id)` | Ask the executor to stop |
 | `waitForJob(id, opts?)` | Poll until it finishes |
 | `followOutput(id, opts?)` | Follow what the commands print, as they print it |
+| `getOutput(id, offset?, limit?)` | One window of the same, for rendering once |
 | `checkAuth()` | Whether Claude Code on that deployment can authenticate |
 | `listSandboxes()` | What it has allocated and whether it got it back |
 

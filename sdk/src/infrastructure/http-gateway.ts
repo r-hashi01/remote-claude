@@ -1,7 +1,14 @@
 import type { JobGateway } from '../application/ports.js';
 import { normaliseUrl } from '../domain/endpoint.js';
 import type { AuthProbe, SandboxLedger } from '../domain/executor.js';
-import type { ContinueJob, JobRecord, JobSummary, LogPage, StartJob } from '../domain/job.js';
+import type {
+  ContinueJob,
+  JobRecord,
+  JobSummary,
+  LogPage,
+  OutputWindow,
+  StartJob,
+} from '../domain/job.js';
 import { ExecutorError } from './errors.js';
 
 export interface ExecutorConfig {
@@ -100,6 +107,12 @@ export class HttpJobGateway implements JobGateway {
 
   logs(jobId: string, since: number): Promise<LogPage> {
     return this.call<LogPage>(`/jobs/${encodeURIComponent(jobId)}/logs?since=${since}`);
+  }
+
+  output(jobId: string, offset: number, limit = 65_536): Promise<OutputWindow> {
+    return this.call<OutputWindow>(
+      `/jobs/${encodeURIComponent(jobId)}/output?offset=${offset}&limit=${limit}`
+    );
   }
 
   async getDiff(jobId: string): Promise<string | null> {

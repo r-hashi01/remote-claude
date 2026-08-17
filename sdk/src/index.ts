@@ -19,7 +19,14 @@
 import { followOutput, type FollowOptions } from './application/follow-output.js';
 import { waitForJob, type WaitOptions } from './application/wait-for-job.js';
 import type { AuthProbe, SandboxLedger } from './domain/executor.js';
-import type { ContinueJob, JobRecord, JobSummary, LogPage, StartJob } from './domain/job.js';
+import type {
+  ContinueJob,
+  JobRecord,
+  JobSummary,
+  LogPage,
+  OutputWindow,
+  StartJob,
+} from './domain/job.js';
 import { HttpJobGateway, type ExecutorConfig } from './infrastructure/http-gateway.js';
 
 export * from './domain/job.js';
@@ -51,6 +58,14 @@ export function createClient(config: ExecutorConfig) {
     cancelJob: (jobId: string) => gateway.cancel(jobId),
     getLogs: (jobId: string, since = 0) => gateway.logs(jobId, since),
     getDiff: (jobId: string) => gateway.getDiff(jobId),
+    /**
+     * One window of what the commands printed, by byte offset.
+     *
+     * `followOutput` for watching; this for reading once. The offset it returns is
+     * what you were shown — pass it back rather than counting bytes.
+     */
+    getOutput: (jobId: string, offset = 0, limit?: number) =>
+      gateway.output(jobId, offset, limit),
     listSandboxes: () => gateway.sandboxes(),
     /** Poll until the job finishes. Resolves on failure too — read `status`. */
     waitForJob: (jobId: string, options?: WaitOptions) => waitForJob(gateway, jobId, options),
