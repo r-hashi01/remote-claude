@@ -28,12 +28,54 @@
  *   patch.diff    written once, on completion
  */
 
-import { spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const STATE_DIR = process.argv[2] ?? '/workspace/.remote-claude';
 const REPO_DIR = process.env.REPO_DIR ?? '/workspace/repo';
+
+/**
+ * Where npm keeps what it has already downloaded.
+ *
+ * Inside the workspace, because that is the directory the Worker can store and put
+ * back between jobs (ADR 0016) — and pointed at from here rather than from the
+ * install command, so every step shares it: the agent's own `npm install` should
+ * not go to the network for something this job already has.
+ *
+ * Set on the process, so children inherit it. The first version set it nowhere and
+ * npm used its default: the Worker then tried to store a directory that did not
+ * exist, and said so — but only to the log of the job that had already finished.
+ *
+ * The image's own cache is carried over the first time rather than abandoned. A
+ * fresh container already answers a hundred-odd packages from what building the
+ * image downloaded — the first measurement showed 104 hits against 78 misses — and
+ * simply pointing npm elsewhere would throw that away on every repository's first
+ * job. Hard links where the filesystem allows it, so carrying it costs nothing.
+ */
+const PACKAGE_CACHE = '/workspace/.npm-cache';
+
+function inheritImageCache() {
+  const fromImage = join(process.env.HOME ?? '/root', '.npm');
+  if (existsSync(PACKAGE_CACHE) || !existsSync(fromImage)) return;
+
+  for (const flags of [['-al'], ['-a']]) {
+    const copy = spawnSync('cp', [...flags, fromImage, PACKAGE_CACHE], { stdio: 'ignore' });
+    if (copy.status === 0) return;
+  }
+}
+
+// Nothing here may take a job down. This runs before `main`, so a throw would land
+// outside the handler that writes `result.json` — the job would end with no record
+// of why, which is the one failure mode this pipeline is built to avoid. The worst
+// case of a failed inherit is an install that fetches, which is what it did before
+// any of this existed.
+try {
+  inheritImageCache();
+} catch {
+  // Reported by its absence: the install below will say `cache miss` for everything.
+}
+process.env.npm_config_cache = PACKAGE_CACHE;
 
 const GIT_USER_NAME = 'remote-claude';
 const GIT_USER_EMAIL = 'remote-claude@users.noreply.github.com';
