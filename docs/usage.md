@@ -30,7 +30,7 @@ job settles:
 | clone | Done by the Worker, because it needs a credential the container must never see |
 | `verify-environment` | Refuses to run unless the container is as promised: none of the credentials belonging to the *other* auth scheme (a subscription deployment must hold no API key, and an API-key deployment must hold no subscription token), and no GitHub credential — the Worker attaches those outside the container |
 | `git-branch` | `claude/<job-id>`, cut from the base branch. `main` is never touched |
-| `install` | Your install command. **Runs even with `skipChecks`** |
+| `install` | Your install command. **Runs even with `skipChecks`**. Retried while the failure looks like the network's — a reset socket here used to lose the whole run before the agent had said anything |
 | `claude-code` | The agent, non-interactive, with permissions bypassed |
 | `lint`, `test`, `build` | Your commands. Failures are reported, not fatal — the diff is still worth having |
 | `git-commit` | Only if something changed |

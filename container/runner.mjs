@@ -85,9 +85,9 @@ function write(name, data) {
  * untruncated.
  *
  * Watching a run is the case that has no answer today. A run that spent twenty
- * minutes looping, one that died at install with ECONNRESET, one that went quiet
- * for four minutes: each was legible only from the output, and only after the
- * fact.
+ * minutes looping, one that died at install with ECONNRESET — which is now retried
+ * rather than fatal — one that went quiet for four minutes: each was legible only
+ * from the output, and only after the fact.
  *
  * Bounded, and it says so when it stops. An unbounded file here is a job's memory
  * consumption decided by how chatty its build is.
@@ -342,8 +342,15 @@ function run(name, command, options = {}) {
         durationMs: Date.now() - startedAt,
         output: truncate(redact(output), options.maxOutput ?? MAX_STEP_OUTPUT),
       };
-      steps.push(step);
+      // `record: false` leaves the decision to a caller that may run this again —
+      // a step is one entry in the pipeline, however many attempts it took.
+      if (options.record !== false) steps.push(step);
       log('system', `${step.success ? '✔' : '✖'} ${name} (exit ${step.exitCode}, ${step.durationMs}ms)`);
+
+      if (options.record === false) {
+        resolve(step);
+        return;
+      }
 
       if (!step.success && !options.allowFailure) {
         reject(new Error(`step "${name}" failed with exit code ${step.exitCode}`));
@@ -357,6 +364,84 @@ function run(name, command, options = {}) {
       reject(error);
     });
   });
+}
+
+/**
+ * Failures that are the network's, not the job's.
+ *
+ * A job died at `install` with ECONNRESET, which is nobody's decision and the
+ * worst possible timing: install runs before the agent, so the job failed without
+ * a conversation — and a job with no conversation cannot be continued either. The
+ * whole run was lost to a reset socket.
+ *
+ * npm retries its own fetches twice; anything reaching here has already outlived
+ * that. Matching on the output rather than the exit code because the exit code of
+ * a failed `npm ci` says only that it failed.
+ */
+const TRANSIENT_NETWORK = [
+  /ECONNRESET/,
+  /ETIMEDOUT/,
+  /ESOCKETTIMEDOUT/,
+  /ERR_SOCKET_TIMEOUT/,
+  /EAI_AGAIN/,
+  /ENETUNREACH/,
+  /EHOSTUNREACH/,
+  /ECONNREFUSED/,
+  /socket hang up/i,
+  /network (?:timeout|error)/i,
+  /request to \S+ failed/i,
+  /\b(?:429|502|503|504)\b.*(?:registry|gateway|unavailable|too many)/i,
+];
+
+function transientNetworkFailure(output) {
+  const matched = TRANSIENT_NETWORK.find((pattern) => pattern.test(output));
+  return matched ? (output.match(matched)?.[0] ?? 'a network failure').slice(0, 60) : null;
+}
+
+/** How long to wait before trying again. Short, then long enough to matter. */
+const RETRY_BACKOFF_MS = [2_000, 8_000];
+
+/**
+ * Run a step, and run it again while its failure looks like the network's.
+ *
+ * Deliberately narrow. A command that fails on its own terms fails on the first
+ * attempt: retrying `npm ci` because a lockfile disagrees would waste two minutes
+ * to reach the same conclusion, and retrying anything with side effects would be
+ * worse than that.
+ *
+ * Attempts are not hidden. One step is recorded, because a step is a stage of the
+ * pipeline rather than a count of tries, and what the earlier attempts printed is
+ * kept in its output — a run that took three goes to install should look like one.
+ */
+async function runWithRetries(name, command, options = {}) {
+  const attempts = options.attempts ?? RETRY_BACKOFF_MS.length + 1;
+  const earlier = [];
+
+  for (let attempt = 1; ; attempt += 1) {
+    const step = await run(name, command, { ...options, record: false });
+    const reason = step.success ? null : transientNetworkFailure(step.output);
+    const lastAttempt = attempt >= attempts;
+
+    if (step.success || !reason || lastAttempt) {
+      if (earlier.length > 0) {
+        step.output = truncate(
+          `${earlier.join('\n')}\n--- attempt ${attempt} ---\n${step.output}`,
+          options.maxOutput ?? MAX_STEP_OUTPUT
+        );
+      }
+      steps.push(step);
+      if (!step.success && !options.allowFailure) {
+        const gaveUp = reason ? ` after ${attempt} attempts (${reason})` : '';
+        throw new Error(`step "${name}" failed with exit code ${step.exitCode}${gaveUp}`);
+      }
+      return step;
+    }
+
+    const wait = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
+    log('system', `⟳ ${name}: ${reason} — the network, not the job. Retrying in ${wait / 1000}s (attempt ${attempt + 1} of ${attempts})`);
+    earlier.push(`--- attempt ${attempt} (exit ${step.exitCode}, ${reason}) ---\n${step.output}`);
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
 }
 
 function skip(name, reason) {
@@ -498,7 +583,12 @@ async function main() {
   );
 
   setStatus('installing');
-  if (commands.install) await run('install', commands.install, { timeoutMs: job.stepTimeoutMs });
+  // Retried, because a reset socket here loses a whole run before the agent has
+  // said anything. The checks below are not: they run after the work exists, so
+  // their failure costs a report rather than the job.
+  if (commands.install) {
+    await runWithRetries('install', commands.install, { timeoutMs: job.stepTimeoutMs });
+  }
   else skip('install', 'INSTALL_COMMAND is not configured');
 
   setStatus('running');
