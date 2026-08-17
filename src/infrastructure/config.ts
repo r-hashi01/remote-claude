@@ -117,13 +117,18 @@ export function parseAllowedHosts(env: Partial<Env>): string[] {
   const account = env.CLOUDFLARE_ACCOUNT_ID?.trim();
   if (account) {
     const endpoint = `${account}.r2.cloudflarestorage.com`;
-    // Both addressing styles, because the uploader picks one and the list is
-    // matched by host. A small body goes to the path-style endpoint; a large one
-    // becomes a multipart upload addressed to the bucket as a subdomain — and a
-    // host that is not on this list is answered by the interception with its own
-    // certificate, which arrives as "self signed certificate in certificate
-    // chain" from inside the container. That is what it said, for the one upload
-    // large enough to take the other path.
+    // Both addressing styles, because either can be the one the uploader picks and
+    // the list is matched by host.
+    //
+    // Added while chasing a "self signed certificate in certificate chain" on a
+    // large upload, on the theory that the missing host was being answered by the
+    // interception with its own certificate. **That theory was wrong**, and the
+    // container said so when asked: a host that is not on this list answers 520,
+    // and a host that is on it presents a chain even Node's bundled roots accept.
+    // The certificate error is in the multipart path itself, not in this list.
+    //
+    // Kept because both styles being reachable is right on its own terms — and
+    // labelled, so the next reader does not inherit the wrong reason for it.
     const bucket = env.BACKUP_BUCKET_NAME?.trim();
     for (const host of [endpoint, ...(bucket ? [`${bucket}.${endpoint}`] : [])]) {
       if (!hosts.includes(host)) hosts.push(host);

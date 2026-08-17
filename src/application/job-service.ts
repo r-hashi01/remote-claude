@@ -17,7 +17,13 @@ import type {
   PullRequestRequest,
   WorkspaceRef,
 } from '../domain/job/record';
-import { PACKAGE_CACHE_DIR, cacheKeyFor, shouldKeepCache } from '../domain/job/package-cache';
+import {
+  MAX_CACHE_UPLOAD_MB,
+  PACKAGE_CACHE_DIR,
+  cacheKeyFor,
+  fitsInOneUpload,
+  shouldKeepCache,
+} from '../domain/job/package-cache';
 import { redactWindow } from '../domain/redaction/window';
 import { composePullRequest } from '../domain/job/pull-request';
 import { resolveRepository } from '../domain/job/repository';
@@ -1130,6 +1136,24 @@ export class JobService {
 
     try {
       const sandbox = await sandboxes.create(sandboxIdForJob(jobId));
+
+      // Asked before uploading, because past a size the upload cannot succeed —
+      // and a doomed transfer of two hundred megabytes at the end of every job is
+      // worse than not trying. The number and the reason are in the domain.
+      const measured = await sandbox.exec(`du -sm ${PACKAGE_CACHE_DIR} | cut -f1`);
+      const megabytes = Number.parseInt(measured.stdout.trim(), 10);
+      if (Number.isFinite(megabytes) && !fitsInOneUpload(megabytes)) {
+        this.log(
+          jobId,
+          'system',
+          `the package cache is ${megabytes}MB, over the ${MAX_CACHE_UPLOAD_MB}MB an upload ` +
+            'can carry, so it stays in this container. The image\'s own cache still answers ' +
+            'what it has.',
+        );
+        this.deps.logs.flush(jobId);
+        return;
+      }
+
       const ref = await sandbox.snapshot({
         dir: PACKAGE_CACHE_DIR,
         name: cacheKeyFor(job.repo),
