@@ -402,6 +402,50 @@ function transientNetworkFailure(output) {
 const RETRY_BACKOFF_MS = [2_000, 8_000];
 
 /**
+ * How to fetch, per attempt, when the failure is throughput rather than luck.
+ *
+ * The evidence said so. Five failures, all mid-transfer, all after a long stretch
+ * with no output — 75s, 105s — and in two flavours: the connection cut
+ * (ECONNRESET) or nothing coming back (ETIMEDOUT). Small packages never failed;
+ * they report progress before the cliff. And the successes took 56s, 78s, 111s,
+ * which is not a healthy distribution — it is the same transfer finishing just
+ * inside the limit.
+ *
+ * npm opens fifteen sockets at once by default. Through a narrow path that is
+ * fifteen streams each too slow to keep its socket alive, so the timeouts fire on
+ * a connection that is working, only slowly. Retrying that shape reaches the same
+ * cliff; the shape is what has to change.
+ *
+ * Set through the environment rather than by editing the command, because the
+ * command belongs to the deployment or the job. npm reads `npm_config_*`; anything
+ * that is not npm ignores them.
+ */
+const FETCH_SHAPES = [
+  { npm_config_maxsockets: '8' },
+  { npm_config_maxsockets: '3' },
+  { npm_config_maxsockets: '1' },
+];
+
+/** Applies to every attempt: patience is not the variable being tested. */
+const FETCH_PATIENCE = {
+  // Five minutes by default, which is the whole request. A slow transfer needs
+  // longer than a fast one, and waiting is cheaper than starting over.
+  npm_config_fetch_timeout: '900000',
+  npm_config_fetch_retries: '4',
+  npm_config_fetch_retry_maxtimeout: '120000',
+  // Progress on a pipe is off, which is why the log went quiet for 105 seconds.
+  // This does not turn it on — it says what npm is doing between fetches.
+  npm_config_loglevel: 'http',
+};
+
+function fetchShape(attempt) {
+  return {
+    ...FETCH_PATIENCE,
+    ...(FETCH_SHAPES[Math.min(attempt - 1, FETCH_SHAPES.length - 1)] ?? {}),
+  };
+}
+
+/**
  * Run a step, and run it again while its failure looks like the network's.
  *
  * Deliberately narrow. A command that fails on its own terms fails on the first
@@ -417,8 +461,24 @@ async function runWithRetries(name, command, options = {}) {
   const attempts = options.attempts ?? RETRY_BACKOFF_MS.length + 1;
   const earlier = [];
 
+  // The attempts share the step's budget rather than each taking all of it. A
+  // step may run for the whole job by default, so three attempts of that would
+  // reach the job's own deadline — and then the run reports "job exceeded
+  // 1800000ms" instead of which step could not finish, which is the wrong sentence
+  // to be handed. Installs that succeed take one or two minutes; a third of the
+  // budget is generous against that and still leaves the agent its time.
+  const perAttempt = options.timeoutMs
+    ? Math.floor(options.timeoutMs / attempts)
+    : undefined;
+
   for (let attempt = 1; ; attempt += 1) {
-    const step = await run(name, command, { ...options, record: false });
+    const shape = options.reshapeFetches ? fetchShape(attempt) : {};
+    const step = await run(name, command, {
+      ...options,
+      ...(perAttempt ? { timeoutMs: perAttempt } : {}),
+      env: { ...(options.env ?? {}), ...shape },
+      record: false,
+    });
     const reason = step.success ? null : transientNetworkFailure(step.output);
     const lastAttempt = attempt >= attempts;
 
@@ -438,7 +498,14 @@ async function runWithRetries(name, command, options = {}) {
     }
 
     const wait = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
-    log('system', `⟳ ${name}: ${reason} — the network, not the job. Retrying in ${wait / 1000}s (attempt ${attempt + 1} of ${attempts})`);
+    const next = options.reshapeFetches
+      ? `, with ${fetchShape(attempt + 1).npm_config_maxsockets} parallel fetches instead of ${shape.npm_config_maxsockets}`
+      : '';
+    log(
+      'system',
+      `⟳ ${name}: ${reason} — the network, not the job. Retrying in ${wait / 1000}s` +
+        ` (attempt ${attempt + 1} of ${attempts})${next}`
+    );
     earlier.push(`--- attempt ${attempt} (exit ${step.exitCode}, ${reason}) ---\n${step.output}`);
     await new Promise((resolve) => setTimeout(resolve, wait));
   }
@@ -587,7 +654,11 @@ async function main() {
   // said anything. The checks below are not: they run after the work exists, so
   // their failure costs a report rather than the job.
   if (commands.install) {
-    await runWithRetries('install', commands.install, { timeoutMs: job.stepTimeoutMs });
+    await runWithRetries('install', commands.install, {
+      timeoutMs: job.stepTimeoutMs,
+      // Fewer parallel fetches each time, because what failed was throughput.
+      reshapeFetches: true,
+    });
   }
   else skip('install', 'INSTALL_COMMAND is not configured');
 
