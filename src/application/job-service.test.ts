@@ -1555,3 +1555,56 @@ describe('the package cache', () => {
     );
   });
 });
+
+/**
+ * A cache too large for the upload path is not attempted.
+ *
+ * 193 MB was measured, and that becomes a multipart upload, which fails from inside
+ * the container. Two hundred megabytes spent at the end of every job to reach the
+ * same error is worse than saying so.
+ */
+describe('a package cache that cannot be stored', () => {
+  test('is measured, reported and left where it is', async () => {
+    const caches = new InMemoryPackageCacheStore();
+    const h = harness({ caches });
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.script({ result: { success: true, exitCode: 0, stdout: '193\n', stderr: '' } });
+    sandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() })
+    );
+    sandbox.files.set(
+      `${STATE_DIR}/result.json`,
+      JSON.stringify({
+        changed: false,
+        pushed: false,
+        branch: job.branch,
+        claudeOutput: '',
+        gitStatus: '',
+        diffStat: '',
+        diffBytes: 0,
+        steps: [
+          {
+            name: 'install',
+            command: 'npm ci',
+            exitCode: 0,
+            success: true,
+            durationMs: 1,
+            output: 'npm http fetch GET 200 https://registry.npmjs.org/x (cache miss)',
+          },
+        ],
+      })
+    );
+
+    await h.service.tick();
+
+    expect(caches.refs.size).toBe(0);
+    expect(h.sandboxes.get(`rc-${job.id}`).snapshotted.map((one) => one.dir)).not.toContain(
+      '/workspace/.npm-cache'
+    );
+    expect(h.logs.all(job.id).join('\n')).toMatch(/193MB, over the 100MB/);
+  });
+});

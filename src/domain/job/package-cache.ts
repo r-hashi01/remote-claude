@@ -42,3 +42,24 @@ export interface CacheOutcome {
 export function shouldKeepCache({ installed, fetched }: CacheOutcome): boolean {
   return installed && fetched;
 }
+
+/**
+ * How large a cache may be and still reach the bucket.
+ *
+ * Measured: the cache for one repository is 193 MB, and an upload that size becomes
+ * multipart. Multipart fails from inside the container with "self signed certificate
+ * in certificate chain" — not because of the host allowlist, which was the first
+ * theory and was wrong (a disallowed host answers 520, and an allowed one presents a
+ * chain Node accepts unaided), but somewhere in that upload path itself.
+ *
+ * A workspace snapshot has always worked, and workspaces are a few tens of megabytes:
+ * single-part. So the boundary is real and this is where it is written down, rather
+ * than being rediscovered as a failed upload at the end of every job. Raise it when
+ * the multipart path works; the code on either side of it does not change.
+ */
+export const MAX_CACHE_UPLOAD_MB = 100;
+
+/** Whether a cache of this size can be stored at all. */
+export function fitsInOneUpload(megabytes: number): boolean {
+  return megabytes <= MAX_CACHE_UPLOAD_MB;
+}

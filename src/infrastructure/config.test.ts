@@ -105,11 +105,13 @@ describe('parseAllowedHosts', () => {
 /**
  * Both ways the same bucket can be addressed.
  *
- * A workspace snapshot went up fine and a package cache did not, with "self signed
- * certificate in certificate chain" — which is what the container sees when the
- * interception answers for a host nobody allowed. The difference was size: past a
- * threshold the upload becomes multipart and is addressed to the bucket as a
- * subdomain instead of a path.
+ * Written while chasing a certificate error on a large upload, on a theory that
+ * turned out to be wrong: asked directly, the container answers 520 for a host that
+ * is not on this list and accepts the chain for one that is. The error was in the
+ * multipart path, not here.
+ *
+ * The rule stands on its own — either addressing style should be reachable — and it
+ * is tested for that rather than for the failure it did not explain.
  */
 describe('the R2 hosts a container may reach', () => {
   const account = '2b7e5c1a9f4d';

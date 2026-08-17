@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { PACKAGE_CACHE_DIR, cacheKeyFor, shouldKeepCache } from './package-cache';
+import {
+  MAX_CACHE_UPLOAD_MB,
+  PACKAGE_CACHE_DIR,
+  cacheKeyFor,
+  fitsInOneUpload,
+  shouldKeepCache,
+} from './package-cache';
 
 /**
  * Which cache a job may use, and whether it is worth keeping.
@@ -58,5 +64,27 @@ describe('where the cache lives', () => {
   // carry a copy of it in the tree as well.
   test('is under the workspace and hidden', () => {
     expect(PACKAGE_CACHE_DIR).toMatch(/^\/workspace\/\./);
+  });
+});
+
+/**
+ * The size a cache has to be under to be storable at all.
+ *
+ * 193 MB was measured for one repository, and that becomes a multipart upload, which
+ * fails from inside the container. Written down rather than rediscovered as a failed
+ * upload at the end of every job.
+ */
+describe('whether a cache can be stored', () => {
+  test('a workspace-sized one can', () => {
+    expect(fitsInOneUpload(20)).toBe(true);
+  });
+
+  test('the 193 MB one measured cannot', () => {
+    expect(fitsInOneUpload(193)).toBe(false);
+  });
+
+  test('the boundary itself is included', () => {
+    expect(fitsInOneUpload(MAX_CACHE_UPLOAD_MB)).toBe(true);
+    expect(fitsInOneUpload(MAX_CACHE_UPLOAD_MB + 1)).toBe(false);
   });
 });
