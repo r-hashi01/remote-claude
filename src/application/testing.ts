@@ -23,6 +23,7 @@ import type {
   LogStore,
   OpenPullRequest,
   RunningJobs,
+  PackageCacheStore,
   SandboxLedgerStore,
   SandboxProcess,
   SandboxProvider,
@@ -204,6 +205,21 @@ export class InMemoryLedgerStore implements SandboxLedgerStore {
 
   list(limit: number): SandboxLedgerEntry[] {
     return [...this.entries.values()].slice(0, limit);
+  }
+}
+
+export class InMemoryPackageCacheStore implements PackageCacheStore {
+  readonly refs = new Map<string, SnapshotRef>();
+  /** When each was stored — recorded rather than dropped, as the real one keeps it. */
+  readonly storedAt = new Map<string, number>();
+
+  ref(key: string): SnapshotRef | null {
+    return this.refs.get(key) ?? null;
+  }
+
+  save(key: string, ref: SnapshotRef, now: number): void {
+    this.refs.set(key, ref);
+    this.storedAt.set(key, now);
   }
 }
 

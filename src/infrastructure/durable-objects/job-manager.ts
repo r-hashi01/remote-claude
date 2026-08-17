@@ -16,6 +16,7 @@ import {
   migrate,
   SqliteJobStore,
   SqliteLedgerStore,
+  SqlitePackageCacheStore,
   SqliteLogStore,
 } from '../persistence/sqlite-stores';
 import { RunningJobRegistry } from '../running-jobs';
@@ -54,6 +55,8 @@ export class JobManager extends DurableObject<Env> {
       logs: new SqliteLogStore(sql),
       artifacts: new R2ArtifactStore(env.ARTIFACTS),
       ledger: new SqliteLedgerStore(sql),
+      // Where a repository's package cache is kept between jobs (ADR 0016).
+      caches: new SqlitePackageCacheStore(sql),
       sandboxes: getSandboxProvider(env),
       github: new GitHubAppAccess(env),
       scheduler: {

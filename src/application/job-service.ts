@@ -17,6 +17,7 @@ import type {
   PullRequestRequest,
   WorkspaceRef,
 } from '../domain/job/record';
+import { PACKAGE_CACHE_DIR, cacheKeyFor, shouldKeepCache } from '../domain/job/package-cache';
 import { redactWindow } from '../domain/redaction/window';
 import { composePullRequest } from '../domain/job/pull-request';
 import { resolveRepository } from '../domain/job/repository';
@@ -46,7 +47,7 @@ import type {
   SandboxProvider,
   SandboxSession,
   Scheduler,
-} from './ports';
+  PackageCacheStore,} from './ports';
 import { REPO_DIR, STATE_DIR, WORKSPACE_DIR } from './workspace';
 
 // Re-exported because these are part of this module's story (the runner contract
@@ -110,6 +111,14 @@ export interface JobServiceDeps {
   scheduler: Scheduler;
   running: RunningJobs;
   redact: Redact;
+  /**
+   * Where a repository's package cache is kept between jobs.
+   *
+   * Optional, like the workspace bucket: a deployment without it works, and its
+   * jobs download what they need every time. There is no flag — having somewhere
+   * to keep the cache is the decision.
+   */
+  caches?: PackageCacheStore;
   /** The runner shipped into the container with each job (ADR 0007). */
   runnerSource: string;
   /**
@@ -493,6 +502,11 @@ export class JobService {
           claudeTimeoutMs: policy.claudeTimeoutMs,
         }),
       );
+
+      // What this repository's last job downloaded, if it is still stored. Before
+      // the runner starts, because install is the first thing that would go to the
+      // network — and going to the network is what this avoids.
+      await this.restorePackageCache(job, sandbox);
 
       // Ship the runner with the job rather than relying on the image. One
       // artifact, so no drift (ADR 0007).
@@ -1038,6 +1052,8 @@ export class JobService {
 
     logs.flush(jobId);
     running.end(jobId);
+    // Before the sandbox goes, and after the record: see carryPackageCache.
+    await this.carryPackageCache(jobId);
     if (!job?.options.keepSandbox) await this.teardown(jobId);
     await this.drain();
   }
@@ -1053,6 +1069,83 @@ export class JobService {
    * `.gitignore` is respected, so what travels is the working tree and the
    * conversation beside it — not a reinstalled `node_modules`.
    */
+  /**
+   * Put back what this repository's packages were downloaded into last time.
+   *
+   * One job's install fetched 137 packages, median 1980ms each, one of them
+   * taking 27.6 seconds: the path to the registry is slow, so the answer is to
+   * stop asking. npm's cache is content-addressed, so a cache from before a
+   * dependency moved still answers for everything that did not.
+   *
+   * Never fatal. A missing or expired cache means the install fetches, which is
+   * what it did before this existed.
+   */
+  private async restorePackageCache(job: Job, sandbox: SandboxSession): Promise<void> {
+    const { caches } = this.deps;
+    if (!caches) return;
+
+    const ref = caches.ref(cacheKeyFor(job.repo));
+    if (!ref) return;
+
+    try {
+      if (await sandbox.restore(ref)) {
+        this.log(job.id, 'system', 'restored the package cache from an earlier job');
+      }
+    } catch (error) {
+      this.log(job.id, 'system', `the package cache could not be restored: ${errorMessage(error)}`);
+    }
+  }
+
+  /**
+   * Keep what this job downloaded, for the next one.
+   *
+   * After the record says the job is finished, unlike the workspace: nobody asks
+   * for a cache, so nothing is waiting on this upload. The workspace is a promise
+   * to a caller that may continue the job, and this is an optimisation for a job
+   * that does not exist yet.
+   *
+   * Only when the install went to the network. An install served entirely from the
+   * restored cache has added nothing, and replacing the stored copy with an
+   * identical one spends a transfer to arrive where it started.
+   */
+  private async carryPackageCache(jobId: string): Promise<void> {
+    const { jobs, caches, sandboxes, clock, policy } = this.deps;
+    if (!caches) return;
+
+    const job = jobs.load(jobId);
+    if (!job) return;
+
+    const steps = job.toRecord().result?.steps ?? [];
+    const install = steps.find((step) => step.name === 'install');
+    if (
+      !shouldKeepCache({
+        installed: install !== undefined && install.skipped !== true,
+        // npm says so itself, once per package it did not have. With
+        // `loglevel=http` on, this is in the step's output.
+        fetched: /cache miss|http fetch GET 200/.test(install?.output ?? ''),
+      })
+    ) {
+      return;
+    }
+
+    try {
+      const sandbox = await sandboxes.create(sandboxIdForJob(jobId));
+      const ref = await sandbox.snapshot({
+        dir: PACKAGE_CACHE_DIR,
+        name: cacheKeyFor(job.repo),
+        ttlSeconds: Math.round(policy.retentionMs / 1000),
+      });
+      if (!ref) return;
+
+      caches.save(cacheKeyFor(job.repo), ref, clock.now());
+      this.log(jobId, 'system', 'kept the package cache for the next job');
+      this.deps.logs.flush(jobId);
+    } catch (error) {
+      this.log(jobId, 'system', `the package cache could not be kept: ${errorMessage(error)}`);
+      this.deps.logs.flush(jobId);
+    }
+  }
+
   private async carryWorkspace(jobId: string): Promise<WorkspaceRef | null> {
     const { jobs, sandboxes, policy } = this.deps;
     const job = jobs.load(jobId);
@@ -1066,7 +1159,9 @@ export class JobService {
         ttlSeconds: Math.round(policy.retentionMs / 1000),
         // Named rather than inferred: git rules apply only inside a repository,
         // and this directory is one above it.
-        excludes: ['node_modules'],
+        // The package cache is stored separately and restored separately; a copy
+        // inside the workspace would double every continuation's transfer.
+        excludes: ['node_modules', '.npm-cache'],
       });
 
       // Null means no store is configured for this deployment. That is a

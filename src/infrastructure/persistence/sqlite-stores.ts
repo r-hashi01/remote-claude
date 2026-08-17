@@ -1,4 +1,10 @@
-import type { JobStore, LogStore, SandboxLedgerStore } from '../../application/ports';
+import type {
+  JobStore,
+  LogStore,
+  PackageCacheStore,
+  SandboxLedgerStore,
+  SnapshotRef,
+} from '../../application/ports';
 import { Job } from '../../domain/job/job';
 import type { JobRecord, JobStatus, LogLine, LogStream } from '../../domain/job/record';
 import type { SandboxLedgerEntry } from '../../domain/sandbox/ledger';
@@ -52,6 +58,11 @@ export function migrate(sql: SqlStorage): void {
       created_at INTEGER NOT NULL,
       status     TEXT NOT NULL,
       data       TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS package_caches (
+      key        TEXT PRIMARY KEY,
+      ref        TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS logs (
       job_id TEXT NOT NULL,
@@ -264,5 +275,33 @@ export class SqliteLedgerStore implements SandboxLedgerStore {
         Math.min(Math.max(limit, 1), 100)
       )
       .toArray();
+  }
+}
+
+/**
+ * The stored package cache per repository.
+ *
+ * One row, replaced. A cache is a single best-known copy — keeping every
+ * generation would store the history of something whose only value is being
+ * current, and the copies are megabytes each.
+ */
+export class SqlitePackageCacheStore implements PackageCacheStore {
+  constructor(private readonly sql: SqlStorage) {}
+
+  ref(key: string): SnapshotRef | null {
+    const row = this.sql
+      .exec<{ ref: string }>('SELECT ref FROM package_caches WHERE key = ?', key)
+      .toArray()[0];
+    return row ? (JSON.parse(row.ref) as SnapshotRef) : null;
+  }
+
+  save(key: string, ref: SnapshotRef, now: number): void {
+    this.sql.exec(
+      `INSERT INTO package_caches (key, ref, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET ref = excluded.ref, updated_at = excluded.updated_at`,
+      key,
+      JSON.stringify(ref),
+      now
+    );
   }
 }

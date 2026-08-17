@@ -18,6 +18,7 @@ import type { SandboxLedgerEntry } from '../../domain/sandbox/ledger';
  */
 
 export * from './sandbox';
+import type { SnapshotRef } from './sandbox';
 
 export interface Clock {
   now(): number;
@@ -54,6 +55,19 @@ export interface ArtifactStore {
   putPatch(jobId: string, patch: string): Promise<void>;
   putResult(jobId: string, body: string): Promise<void>;
   getPatch(jobId: string): Promise<string | null>;
+}
+
+/**
+ * Where the stored package cache for a repository is, if there is one.
+ *
+ * One row per repository, replaced rather than accumulated: a cache is a single
+ * best-known copy, and keeping every generation of it would store the history of
+ * something whose only value is being current.
+ */
+export interface PackageCacheStore {
+  /** The stored cache for this key, or null when nothing has been kept yet. */
+  ref(key: string): SnapshotRef | null;
+  save(key: string, ref: SnapshotRef, now: number): void;
 }
 
 export interface SandboxLedgerStore {
