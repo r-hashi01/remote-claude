@@ -115,8 +115,19 @@ export function parseAllowedHosts(env: Partial<Env>): string[] {
   // upload that got as far as trying failed with a 520 from a host nobody had
   // allowed.
   const account = env.CLOUDFLARE_ACCOUNT_ID?.trim();
-  if (account && !hosts.some((host) => host.endsWith('.r2.cloudflarestorage.com'))) {
-    hosts.push(`${account}.r2.cloudflarestorage.com`);
+  if (account) {
+    const endpoint = `${account}.r2.cloudflarestorage.com`;
+    // Both addressing styles, because the uploader picks one and the list is
+    // matched by host. A small body goes to the path-style endpoint; a large one
+    // becomes a multipart upload addressed to the bucket as a subdomain — and a
+    // host that is not on this list is answered by the interception with its own
+    // certificate, which arrives as "self signed certificate in certificate
+    // chain" from inside the container. That is what it said, for the one upload
+    // large enough to take the other path.
+    const bucket = env.BACKUP_BUCKET_NAME?.trim();
+    for (const host of [endpoint, ...(bucket ? [`${bucket}.${endpoint}`] : [])]) {
+      if (!hosts.includes(host)) hosts.push(host);
+    }
   }
 
   return hosts;
