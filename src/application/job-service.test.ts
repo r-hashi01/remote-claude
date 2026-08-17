@@ -13,6 +13,7 @@ import {
   InMemoryJobStore,
   InMemoryLedgerStore,
   InMemoryLogStore,
+  InMemoryPackageCacheStore,
   InMemoryRunningJobs,
   RecordingScheduler,
 } from './testing';
@@ -1003,7 +1004,8 @@ describe('carrying a workspace between sandboxes', () => {
     // /workspace is one above it, so asking for gitignore there does nothing.
     expect(sandbox.snapshotted[0]).toMatchObject({
       dir: '/workspace',
-      excludes: ['node_modules'],
+      // The package cache is stored separately, so it is not carried twice.
+      excludes: ['node_modules', '.npm-cache'],
     });
     // node_modules is reinstallable; the conversation is not.
     expect(h.jobs.load(job.id)?.toRecord().workspace).toEqual({ provider: 'fake', id: 'snap-1' });
@@ -1440,5 +1442,116 @@ describe('reading a job\'s terminal output', () => {
   test('has nothing to say about a job it does not know', async () => {
     const h = harness();
     await expect(h.service.readOutput('no-such-job', 0, 100)).rejects.toThrow(/no-such-job/);
+  });
+});
+
+/**
+ * Not downloading what was already downloaded.
+ *
+ * One job's install fetched 137 packages, median 1980ms each, one of them taking
+ * 27.6 seconds — the path to the registry is slow, so the answer is to stop
+ * asking. npm's cache is content-addressed, so a cache from before a dependency
+ * moved still answers for everything that did not.
+ */
+describe('the package cache', () => {
+  function harnessWithCache(): Harness & { caches: InMemoryPackageCacheStore } {
+    const caches = new InMemoryPackageCacheStore();
+    return { ...harness({ caches }), caches };
+  }
+
+  /** A job that has finished, having installed and fetched. */
+  async function finished(
+    h: Harness,
+    installOutput = 'npm http fetch GET 200 https://registry.npmjs.org/x (cache miss)'
+  ): Promise<string> {
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() })
+    );
+    sandbox.files.set(
+      `${STATE_DIR}/result.json`,
+      JSON.stringify({
+        changed: false,
+        pushed: false,
+        branch: job.branch,
+        claudeOutput: '',
+        gitStatus: '',
+        diffStat: '',
+        diffBytes: 0,
+        steps: [
+          {
+            name: 'install',
+            command: 'npm ci',
+            exitCode: 0,
+            success: true,
+            durationMs: 44_632,
+            output: installOutput,
+          },
+        ],
+      })
+    );
+    await h.service.tick();
+    return job.id;
+  }
+
+  test('is kept when the install went to the network', async () => {
+    const h = harnessWithCache();
+
+    const jobId = await finished(h);
+
+    expect(h.jobs.load(jobId)?.status).toBe('completed');
+    expect(h.caches.refs.size).toBe(1);
+    expect(h.sandboxes.get(`rc-${jobId}`).snapshotted.map((one) => one.dir)).toContain(
+      '/workspace/.npm-cache'
+    );
+  });
+
+  // Uploading costs time as well. Replacing the stored copy with an identical one
+  // spends a transfer to arrive where it started.
+  test('is left alone when nothing was fetched', async () => {
+    const h = harnessWithCache();
+
+    await finished(h, 'up to date, audited 101 packages');
+
+    expect(h.caches.refs.size).toBe(0);
+  });
+
+  test('is restored before the runner starts', async () => {
+    const h = harnessWithCache();
+    h.caches.save('npm-r-hashi01-spindle', { provider: 'fake', id: 'cache-1', dir: '/workspace/.npm-cache' }, 1);
+
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    expect(sandbox.restored.map((one) => one.id)).toEqual(['cache-1']);
+    // Before the runner: install is the first thing that would go to the network.
+    expect(h.logs.all(job.id).join('\n')).toMatch(/restored the package cache/);
+  });
+
+  test('is not carried inside the workspace as well', async () => {
+    const h = harnessWithCache();
+
+    const jobId = await finished(h);
+
+    const workspace = h.sandboxes
+      .get(`rc-${jobId}`)
+      .snapshotted.find((one) => one.dir === '/workspace');
+    expect(workspace?.excludes).toContain('.npm-cache');
+  });
+
+  // A deployment without a store works; its jobs download what they need.
+  test('is simply absent when the deployment keeps none', async () => {
+    const h = harness();
+
+    const jobId = await finished(h);
+
+    expect(h.jobs.load(jobId)?.status).toBe('completed');
+    expect(h.sandboxes.get(`rc-${jobId}`).snapshotted.map((one) => one.dir)).not.toContain(
+      '/workspace/.npm-cache'
+    );
   });
 });
