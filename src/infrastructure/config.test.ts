@@ -88,12 +88,53 @@ describe('parseAllowedHosts', () => {
     );
   });
 
-  test('leaves an explicitly configured R2 host alone', () => {
+  // This used to stop deriving as soon as any R2 host was configured, on the
+  // grounds that an explicit list should win. It cost an upload: a list naming one
+  // host is not a list that names the two this feature needs, and the missing one
+  // is answered by the interception with its own certificate. An explicit entry is
+  // kept and added to, never replaced.
+  test('keeps an explicitly configured R2 host and still derives its own', () => {
     const hosts = parseAllowedHosts(
       env({ CLOUDFLARE_ACCOUNT_ID: 'acc123', SANDBOX_ALLOWED_HOSTS: 'other.r2.cloudflarestorage.com' })
     );
-    expect(hosts.filter((host) => host.endsWith('.r2.cloudflarestorage.com'))).toEqual([
-      'other.r2.cloudflarestorage.com',
-    ]);
+    expect(hosts).toContain('other.r2.cloudflarestorage.com');
+    expect(hosts).toContain('acc123.r2.cloudflarestorage.com');
+  });
+});
+
+/**
+ * Both ways the same bucket can be addressed.
+ *
+ * A workspace snapshot went up fine and a package cache did not, with "self signed
+ * certificate in certificate chain" — which is what the container sees when the
+ * interception answers for a host nobody allowed. The difference was size: past a
+ * threshold the upload becomes multipart and is addressed to the bucket as a
+ * subdomain instead of a path.
+ */
+describe('the R2 hosts a container may reach', () => {
+  const account = '2b7e5c1a9f4d';
+  const bucket = 'remote-claude-workspaces';
+
+  test('include both addressing styles', () => {
+    const hosts = parseAllowedHosts({
+      CLOUDFLARE_ACCOUNT_ID: account,
+      BACKUP_BUCKET_NAME: bucket,
+    } as never);
+
+    expect(hosts).toContain(`${account}.r2.cloudflarestorage.com`);
+    expect(hosts).toContain(`${bucket}.${account}.r2.cloudflarestorage.com`);
+  });
+
+  test('stop at the endpoint when no bucket is named', () => {
+    const hosts = parseAllowedHosts({ CLOUDFLARE_ACCOUNT_ID: account } as never);
+
+    expect(hosts).toContain(`${account}.r2.cloudflarestorage.com`);
+    expect(hosts.filter((host) => host.endsWith('.r2.cloudflarestorage.com'))).toHaveLength(1);
+  });
+
+  test('add nothing when the account is unknown', () => {
+    const hosts = parseAllowedHosts({ BACKUP_BUCKET_NAME: bucket } as never);
+
+    expect(hosts.some((host) => host.includes('r2.cloudflarestorage.com'))).toBe(false);
   });
 });
