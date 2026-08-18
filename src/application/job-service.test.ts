@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 import { REPO_DIR, STATE_DIR, WORKSPACE_DIR, JobService, type JobServiceDeps } from './job-service';
 import { Job } from '../domain/job/job';
-import { PlatformFailure } from '../domain/job/platform-failure';
 import type { ExecutorPolicy } from './ports';
 import {
   AllowAllGitHub,
@@ -1657,15 +1656,31 @@ describe('what a stored workspace leaves behind', () => {
  * whether the work landed — and none of it was being kept.
  */
 describe('a failure the platform explained', () => {
-  /** What the adapter raises once it has read the SDK's error. */
-  function interrupted(reason: string, extra: Record<string, unknown> = {}): PlatformFailure {
-    return new PlatformFailure('Sandbox operation process.start was interrupted', {
-      reason,
-      retryable: reason === 'runtime_replaced',
-      phase: 'awaiting-response',
-      operation: 'process.start',
-      admitted: false,
-      ...extra,
+  /**
+   * An error shaped as the SDK shapes them — thrown as it is, not converted.
+   *
+   * The point of the change under test: whatever the platform put in `context`
+   * reaches the log and the record, including fields nothing here knows about.
+   */
+  function interrupted(reason: string, context: Record<string, unknown> = {}): Error {
+    const error = new Error('Sandbox operation process.start was interrupted');
+    return Object.assign(error, {
+      toJSON: () => ({
+        name: 'OperationInterruptedError',
+        message: error.message,
+        code: 'OPERATION_INTERRUPTED',
+        operation: 'process.start',
+        httpStatus: 503,
+        context: {
+          reason,
+          retryable: reason === 'runtime_replaced',
+          phase: 'awaiting-response',
+          admitted: false,
+          ...context,
+        },
+        timestamp: '2026-08-18T00:00:00.000Z',
+        stack: 'Error: …',
+      }),
     });
   }
 
@@ -1680,9 +1695,11 @@ describe('a failure the platform explained', () => {
 
     const settled = h.jobs.load(job.id);
     expect(settled?.status).toBe('failed');
-    expect(settled?.toRecord().error).toMatch(/reason recovery_exhausted/);
-    expect(settled?.toRecord().error).toMatch(/at phase awaiting-response/);
-    expect(h.logs.all(job.id).join('\n')).toMatch(/the platform says: reason recovery_exhausted/);
+    // The platform's own words, not a sentence written here about them.
+    expect(settled?.toRecord().error).toMatch(/code=OPERATION_INTERRUPTED/);
+    expect(settled?.toRecord().error).toMatch(/"reason":"recovery_exhausted"/);
+    expect(settled?.toRecord().error).toMatch(/"phase":"awaiting-response"/);
+    expect(h.logs.all(job.id).join('\n')).toMatch(/platform error: code=OPERATION_INTERRUPTED/);
   });
 
   // The distinction message matching could not make. Both read almost the same.

@@ -157,45 +157,25 @@ describe('shouldRetryLostContainer', () => {
  * The SDK has said `retryable` all along.
  */
 describe('deciding from what the platform said', () => {
-  test('retries what the platform calls retryable', () => {
-    expect(
-      shouldRetryPlatformFailure({ reason: 'runtime_replaced', retryable: true })
-    ).toBe(true);
-  });
-
-  // The distinction that was impossible before: a destroyed sandbox and a replaced
-  // runtime produce similar messages and opposite answers.
-  test('does not retry a sandbox that was destroyed', () => {
-    expect(
-      shouldRetryPlatformFailure({ reason: 'sandbox_lifetime_changed', retryable: false })
-    ).toBe(false);
-  });
-
-  test('does not retry once the platform has given up recovering', () => {
-    expect(
-      shouldRetryPlatformFailure({ reason: 'recovery_exhausted', retryable: false })
-    ).toBe(false);
+  // One rule, not one per reason. The SDK's own guidance is to read the flag rather
+  // than branch on the reason string — `runtime_replaced` arrives retryable and
+  // `sandbox_lifetime_changed` does not, and the messages look almost the same,
+  // which is exactly why the old pattern could not tell them apart. The reason still
+  // reaches the log; it just does not decide anything.
+  test('follows the flag the platform sets', () => {
+    expect(shouldRetryPlatformFailure({ retryable: true })).toBe(true);
+    expect(shouldRetryPlatformFailure({ retryable: false })).toBe(false);
   });
 
   // A retry after committed effects is a second execution, not another attempt —
   // the rule ADR 0006 states, now answerable rather than inferred from timing.
   test('does not retry work the platform says already landed', () => {
-    expect(
-      shouldRetryPlatformFailure({ reason: 'runtime_replaced', retryable: true, admitted: true })
-    ).toBe(false);
+    expect(shouldRetryPlatformFailure({ retryable: true, admitted: true })).toBe(false);
   });
 
   test('retries when nothing had run, and when that is unknown', () => {
-    expect(
-      shouldRetryPlatformFailure({ reason: 'runtime_replaced', retryable: true, admitted: false })
-    ).toBe(true);
-    expect(
-      shouldRetryPlatformFailure({
-        reason: 'transport_disposed',
-        retryable: true,
-        admitted: 'unknown',
-      })
-    ).toBe(true);
+    expect(shouldRetryPlatformFailure({ retryable: true, admitted: false })).toBe(true);
+    expect(shouldRetryPlatformFailure({ retryable: true, admitted: 'unknown' })).toBe(true);
   });
 
   // Without details there is nothing to read, so the old rule still answers. It is

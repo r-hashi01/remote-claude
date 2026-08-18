@@ -123,6 +123,19 @@ SDK は最初から構造化して投げていた。`OperationInterruptedError` 
 **到達したかどうかは推測するしかなかった**。いまはプラットフォームが答える。
 `admitted: true` なら再試行しない — それは再試行ではなく2回目の実行だから。
 
-層は守っている。SDK を知るのは `infrastructure/sandbox/failure.ts` だけで、
-そこが `PlatformFailureDetails` に翻訳する。domain の規則はその形だけを見るので、
-workerd 無しでテストできる。
+**エラーは変換しない。** 最初の実装はここを間違えた —
+SDK のエラーから必要そうな項目を自前のクラスに詰め替えて投げ直した。
+それは**コピーしなかったものを消す**行為で、残るのは
+プラットフォームの説明ではなくこちらの要約である。
+
+いまは SDK のエラーをそのまま伝播させ、**捕まえた場所で読む**。
+`toJSON()` を持ち `code` と `context` を含むものは彼らのエラー、という構造判定なので、
+domain は SDK を import せず（ADR 0008）、
+**この実装が知らない reason や context のフィールドもそのままログに出る**。
+
+出力も彼らの言葉のままにする。一度は散文に訳して
+`retryable: false` を "not retryable"、`admitted: false` を "nothing had run yet"
+と書いたが、**訳文は信用すべき対象がもう1つ増えることを意味する**。
+いまは `code=… operation=… context={…} suggestion=… documentation=…` と、
+フィールド名と値をそのまま並べる。`suggestion` と `documentation` は
+SDK が書いた対処法とリンクであり、こちらで言い換える理由がない。

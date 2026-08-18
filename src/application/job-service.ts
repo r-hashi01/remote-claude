@@ -27,7 +27,12 @@ import {
 import { redactWindow } from '../domain/redaction/window';
 import { composePullRequest } from '../domain/job/pull-request';
 import { resolveRepository } from '../domain/job/repository';
-import { describePlatformFailure, platformDetails } from '../domain/job/platform-failure';
+import {
+  describePlatformReport,
+  platformReport,
+  reportedAdmitted,
+  reportedRetryable,
+} from '../domain/job/platform-failure';
 import {
   shouldRetryLaunch,
   shouldRetryLostContainer,
@@ -547,13 +552,18 @@ export class JobService {
       // decision below used to be a regular expression over this message, and the
       // record kept the message alone — a container start failed and cost a day to
       // investigate for want of the one word that says which failure it was.
-      const platform = platformDetails(error);
-      const said = describePlatformFailure(platform);
-      if (said) this.log(job.id, 'system', said);
+      const report = platformReport(error);
+      const said = describePlatformReport(report);
+      if (said) this.log(job.id, 'system', `platform error: ${said}`);
 
       // Safe to retry here and only here: the runner has not started, so
       // nothing has run and re-running has no side effects.
-      if (shouldRetryLaunch(message, job.attempts, platform)) {
+      if (
+        shouldRetryLaunch(message, job.attempts, {
+          retryable: reportedRetryable(report),
+          admitted: reportedAdmitted(report),
+        })
+      ) {
         const attempts = job.attempts + 1;
         running.end(job.id);
         await this.teardown(job.id);
@@ -721,13 +731,17 @@ export class JobService {
         output = ((await runner?.output()) ?? '').trim();
       } catch (error) {
         const message = errorMessage(error);
-        const said = describePlatformFailure(platformDetails(error));
+        const report = platformReport(error);
+        const said = describePlatformReport(report);
         this.log(
           jobId,
           'system',
-          `asking after the runner failed: ${message}${said ? ` — ${said}` : ''}`,
+          `asking after the runner failed: ${message}${said ? ` (platform error: ${said})` : ''}`,
         );
-        lookupInterrupted = shouldRetryPlatformFailure(platformDetails(error), message);
+        lookupInterrupted = shouldRetryPlatformFailure(
+          { retryable: reportedRetryable(report), admitted: reportedAdmitted(report) },
+          message,
+        );
       }
 
       // Whether the container is still the one this job was launched into. The
@@ -847,20 +861,23 @@ export class JobService {
       return false;
     } catch (error) {
       const message = errorMessage(error);
-      const details = platformDetails(error);
-      const said = describePlatformFailure(details);
+      const report = platformReport(error);
+      const said = describePlatformReport(report);
       // The reason belongs here as much as anywhere: this is the first call to
       // notice a container going away, and what it noticed decides whether the job
       // is requeued or failed.
       this.log(
         jobId,
         'system',
-        `log mirroring failed: ${message}${said ? ` — ${said}` : ''}`,
+        `log mirroring failed: ${message}${said ? ` (platform error: ${said})` : ''}`,
       );
       // Flush immediately: a buffered report of a logging failure is a report
       // that disappears exactly when it is needed.
       this.deps.logs.flush(jobId);
-      return shouldRetryPlatformFailure(details, message);
+      return shouldRetryPlatformFailure(
+        { retryable: reportedRetryable(report), admitted: reportedAdmitted(report) },
+        message,
+      );
     }
   }
 

@@ -1,5 +1,4 @@
 import { getSandbox } from '@cloudflare/sandbox';
-import { reporting } from './failure';
 import type {
   CloneOptions,
   SandboxProcess,
@@ -54,14 +53,12 @@ class CloudflareSandboxSession implements SandboxSession {
   ) {}
 
   async exec(command: string, options: ExecOptions = {}): Promise<ExecResult> {
-    const result = await reporting('command.execute', () =>
-      this.sandbox.exec(command, {
-        ...(options.cwd ? { cwd: options.cwd } : {}),
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
-        ...(options.onOutput ? { stream: true, onOutput: options.onOutput } : {}),
-      }),
-    );
+    const result = await this.sandbox.exec(command, {
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
+      ...(options.onOutput ? { stream: true, onOutput: options.onOutput } : {}),
+    });
 
     return {
       success: result.success,
@@ -74,13 +71,11 @@ class CloudflareSandboxSession implements SandboxSession {
   async cloneRepository(repoUrl: string, options: CloneOptions): Promise<void> {
     // Credentials are attached by the Worker's outbound handler for github.com,
     // so the URL passed here stays clean and nothing lands in .git/config.
-    await reporting('git.clone', () =>
-      this.sandbox.gitCheckout(repoUrl, {
-        targetDir: options.targetDir,
-        ...(options.branch ? { branch: options.branch } : {}),
-        ...(options.depth ? { depth: options.depth } : {}),
-      }),
-    );
+    await this.sandbox.gitCheckout(repoUrl, {
+      targetDir: options.targetDir,
+      ...(options.branch ? { branch: options.branch } : {}),
+      ...(options.depth ? { depth: options.depth } : {}),
+    });
   }
 
   /**
@@ -92,13 +87,11 @@ class CloudflareSandboxSession implements SandboxSession {
    * left to ask. A process the platform owns can be asked.
    */
   async startProcess(command: string, options: StartProcessOptions): Promise<SandboxProcess> {
-    const started = await reporting('process.start', () =>
-      this.sandbox.startProcess(command, {
-        processId: options.id,
-        ...(options.cwd ? { cwd: options.cwd } : {}),
-        ...(options.env ? { env: options.env } : {}),
-      }),
-    );
+    const started = await this.sandbox.startProcess(command, {
+      processId: options.id,
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      ...(options.env ? { env: options.env } : {}),
+    });
     return this.wrapProcess(started);
   }
 
@@ -195,15 +188,13 @@ class CloudflareSandboxSession implements SandboxSession {
    */
   async snapshot(options: SnapshotOptions): Promise<SnapshotRef | null> {
     if (!this.backupBucket) return null;
-    const backup = await reporting('backup.create', () =>
-      this.sandbox.createBackup({
-        dir: options.dir,
-        ...(options.name ? { name: options.name } : {}),
-        ...(options.ttlSeconds ? { ttl: options.ttlSeconds } : {}),
-        ...(options.respectGitignore ? { gitignore: true } : {}),
-        ...(options.excludes ? { excludes: options.excludes } : {}),
-      }),
-    );
+    const backup = await this.sandbox.createBackup({
+      dir: options.dir,
+      ...(options.name ? { name: options.name } : {}),
+      ...(options.ttlSeconds ? { ttl: options.ttlSeconds } : {}),
+      ...(options.respectGitignore ? { gitignore: true } : {}),
+      ...(options.excludes ? { excludes: options.excludes } : {}),
+    });
     return { provider: PROVIDER_NAME, id: backup.id, dir: backup.dir };
   }
 
@@ -211,12 +202,10 @@ class CloudflareSandboxSession implements SandboxSession {
     if (!this.backupBucket) return false;
     if (ref.provider !== PROVIDER_NAME) return false;
     try {
-      const result = await reporting('backup.restore', () =>
-        this.sandbox.restoreBackup({
-          id: String(ref.id),
-          dir: String(ref.dir),
-        }),
-      );
+      const result = await this.sandbox.restoreBackup({
+        id: String(ref.id),
+        dir: String(ref.dir),
+      });
       return result.success;
     } catch {
       // Expired or missing snapshot — the caller falls back to a fresh clone.

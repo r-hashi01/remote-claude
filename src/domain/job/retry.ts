@@ -1,4 +1,3 @@
-import type { PlatformFailureDetails } from './platform-failure';
 
 /**
  * How many times to retry a job that failed before its runner started.
@@ -39,13 +38,21 @@ export const MAX_LAUNCH_ATTEMPTS = 3;
  * an error that crossed a Durable Object boundary arrives with its name and message
  * and without its context, and not every failure comes from the SDK at all.
  */
+export interface WhatThePlatformSaid {
+  /** `context.retryable`, when the platform's report had one. */
+  retryable?: boolean | undefined;
+  /** `context.admitted`, when it had one. Its three values, unchanged. */
+  admitted?: boolean | 'unknown' | undefined;
+}
+
 export function shouldRetryPlatformFailure(
-  details: PlatformFailureDetails | null,
+  said: WhatThePlatformSaid | null,
   message = ''
 ): boolean {
-  if (!details) return isTransientPlatformError(message);
-  if (details.admitted === true) return false;
-  if (details.retryable !== undefined) return details.retryable;
+  // Effects that reached the container are not repeated by a retry; they are done
+  // twice. This is the line ADR 0006 drew and had to infer from files on disk.
+  if (said?.admitted === true) return false;
+  if (said?.retryable !== undefined) return said.retryable;
   return isTransientPlatformError(message);
 }
 
@@ -160,8 +167,8 @@ export function shouldRetryLostContainer(
 export function shouldRetryLaunch(
   message: string,
   attemptsSoFar: number,
-  details: PlatformFailureDetails | null = null,
+  said: WhatThePlatformSaid | null = null,
   maxAttempts: number = MAX_LAUNCH_ATTEMPTS
 ): boolean {
-  return shouldRetryPlatformFailure(details, message) && attemptsSoFar + 1 < maxAttempts;
+  return shouldRetryPlatformFailure(said, message) && attemptsSoFar + 1 < maxAttempts;
 }
