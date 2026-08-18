@@ -1646,3 +1646,96 @@ describe('what a stored workspace leaves behind', () => {
     expect(workspace?.excludes).toEqual(['node_modules', '.npm-cache']);
   });
 });
+
+/**
+ * What the platform said, on the record.
+ *
+ * A container start failed and cost a day to investigate: the record said an
+ * operation had been interrupted and stopped there, where the platform had already
+ * said which failure it was. It says `reason`, `phase`, whether a retry is safe, and
+ * whether the work landed — and none of it was being kept.
+ */
+describe('a failure the platform explained', () => {
+  /**
+   * An error shaped as the SDK shapes them — thrown as it is, not converted.
+   *
+   * The point of the change under test: whatever the platform put in `context`
+   * reaches the log and the record, including fields nothing here knows about.
+   */
+  function interrupted(reason: string, context: Record<string, unknown> = {}): Error {
+    const error = new Error('Sandbox operation process.start was interrupted');
+    return Object.assign(error, {
+      toJSON: () => ({
+        name: 'OperationInterruptedError',
+        message: error.message,
+        code: 'OPERATION_INTERRUPTED',
+        operation: 'process.start',
+        httpStatus: 503,
+        context: {
+          reason,
+          retryable: reason === 'runtime_replaced',
+          phase: 'awaiting-response',
+          admitted: false,
+          ...context,
+        },
+        timestamp: '2026-08-18T00:00:00.000Z',
+        stack: 'Error: …',
+      }),
+    });
+  }
+
+  test('is written to the log and kept on the job', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    // Fail the start three times over, so the attempt budget runs out and the job
+    // settles rather than being requeued.
+    h.sandboxes.get(`rc-${job.id}`).startProcessErrorObject = interrupted('recovery_exhausted');
+
+    for (let attempt = 0; attempt < 4; attempt += 1) await h.service.tick();
+
+    const settled = h.jobs.load(job.id);
+    expect(settled?.status).toBe('failed');
+    // The platform's own words, not a sentence written here about them.
+    expect(settled?.toRecord().error).toMatch(/code=OPERATION_INTERRUPTED/);
+    expect(settled?.toRecord().error).toMatch(/"reason":"recovery_exhausted"/);
+    expect(settled?.toRecord().error).toMatch(/"phase":"awaiting-response"/);
+    expect(h.logs.all(job.id).join('\n')).toMatch(/platform error: code=OPERATION_INTERRUPTED/);
+  });
+
+  // The distinction message matching could not make. Both read almost the same.
+  test('is retried when the platform says the runtime was replaced', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    h.sandboxes.get(`rc-${job.id}`).startProcessErrorObject = interrupted('runtime_replaced');
+
+    await h.service.tick();
+
+    expect(h.jobs.load(job.id)?.status).toBe('queued');
+    expect(h.jobs.load(job.id)?.attempts).toBe(1);
+  });
+
+  test('is not retried when the platform says the sandbox is gone', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    h.sandboxes.get(`rc-${job.id}`).startProcessErrorObject = interrupted('sandbox_lifetime_changed');
+
+    await h.service.tick();
+
+    expect(h.jobs.load(job.id)?.status).toBe('failed');
+    expect(h.jobs.load(job.id)?.attempts).toBe(0);
+  });
+
+  // A retry after the work landed is a second execution, which is the line ADR 0006
+  // draws and used to have to guess at.
+  test('is not retried when the work had already landed', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    h.sandboxes.get(`rc-${job.id}`).startProcessErrorObject = interrupted('runtime_replaced', {
+      admitted: true,
+    });
+
+    await h.service.tick();
+
+    expect(h.jobs.load(job.id)?.status).toBe('failed');
+  });
+});

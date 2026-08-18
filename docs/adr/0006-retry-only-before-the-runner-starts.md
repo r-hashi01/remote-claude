@@ -86,3 +86,56 @@ ADR 0004 で pipeline をコンテナ内に移し、
 
 コメントはこれに気付けない。`src/conventions.test.ts` に
 **sleep タイマーがジョブ予算より長いこと**を検査するガードを置いた。
+
+## Addendum — 2026-08-18: 推測をやめ、プラットフォームに聞く
+
+この ADR は判別を**メッセージのパターン**で行うと決めた。当時はそれしか無かった。
+そしてこのファイル自身が代償を記録している —
+「二番目の文言は実際のジョブを1件失った。パターンが片方の言い回しを知っていて
+他方を知らなかったせいだ」。
+
+SDK は最初から構造化して投げていた。`OperationInterruptedError` /
+`ContainerUnavailableError` / `RPCTransportError` が持っているもの:
+
+| フィールド | 意味 |
+|---|---|
+| `reason` | `runtime_replaced` / `transport_disposed` / `sandbox_lifetime_changed` / `recovery_exhausted` など |
+| `retryable` | **再試行して安全かの答え** |
+| `phase` | どの段で中断を検知したか |
+| `operation` | `command.execute` / `backup.restore` など |
+| `admitted` | **副作用がコンテナに到達したか**（`true` / `false` / `'unknown'`） |
+
+**参照は1箇所も無かった。** 判断は正規表現で、記録に残るのはメッセージだけ。
+コンテナ起動の失敗を1日かけて調べても原因が特定できなかったのはそのためで、
+`reason` の1語があれば「デプロイで差し替わった」のか
+「サンドボックスが破棄された」のかが即座に分かった。
+
+**決定を2つ変える。**
+
+1. **記録する。** `reason` / `phase` / `operation` / `retryable` / `admitted` を
+   ログとジョブの `error` に残す。読む人が最初に聞くのはこれである
+2. **`retryable` で判断する。** 正規表現は**構造が無いときの後退経路**に降格した。
+   DO の境界を越えたエラーは name と message だけを持って到達するので、
+   後退経路は消せない
+
+`admitted` はこの ADR の中心にある問いへの答えである。ここは
+「runner 起動後の再試行はプロンプトの二重実行になる」という理由で境界を引いたが、
+**到達したかどうかは推測するしかなかった**。いまはプラットフォームが答える。
+`admitted: true` なら再試行しない — それは再試行ではなく2回目の実行だから。
+
+**エラーは変換しない。** 最初の実装はここを間違えた —
+SDK のエラーから必要そうな項目を自前のクラスに詰め替えて投げ直した。
+それは**コピーしなかったものを消す**行為で、残るのは
+プラットフォームの説明ではなくこちらの要約である。
+
+いまは SDK のエラーをそのまま伝播させ、**捕まえた場所で読む**。
+`toJSON()` を持ち `code` と `context` を含むものは彼らのエラー、という構造判定なので、
+domain は SDK を import せず（ADR 0008）、
+**この実装が知らない reason や context のフィールドもそのままログに出る**。
+
+出力も彼らの言葉のままにする。一度は散文に訳して
+`retryable: false` を "not retryable"、`admitted: false` を "nothing had run yet"
+と書いたが、**訳文は信用すべき対象がもう1つ増えることを意味する**。
+いまは `code=… operation=… context={…} suggestion=… documentation=…` と、
+フィールド名と値をそのまま並べる。`suggestion` と `documentation` は
+SDK が書いた対処法とリンクであり、こちらで言い換える理由がない。

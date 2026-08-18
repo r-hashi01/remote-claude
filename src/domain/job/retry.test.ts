@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   MAX_LAUNCH_ATTEMPTS,
+  shouldRetryPlatformFailure,
   shouldRetryLaunch,
   shouldRetryLostContainer,
   shouldRetrySilentStartup,
@@ -142,5 +143,46 @@ describe('shouldRetryLostContainer', () => {
   test('shares the launch attempt budget', () => {
     expect(shouldRetryLostContainer({ ...base, attemptsSoFar: MAX_LAUNCH_ATTEMPTS - 2 })).toBe(true);
     expect(shouldRetryLostContainer({ ...base, attemptsSoFar: MAX_LAUNCH_ATTEMPTS - 1 })).toBe(false);
+  });
+});
+
+/**
+ * The platform's own answer, where there used to be a guess.
+ *
+ * `isTransientPlatformError` matched the message with a regular expression, and its
+ * own comment recorded what that cost: "The second one cost a real job. It failed
+ * during the clone — before the runner existed, so nothing had run — and was not
+ * retried only because the pattern knew the first phrasing and not the second."
+ *
+ * The SDK has said `retryable` all along.
+ */
+describe('deciding from what the platform said', () => {
+  // One rule, not one per reason. The SDK's own guidance is to read the flag rather
+  // than branch on the reason string — `runtime_replaced` arrives retryable and
+  // `sandbox_lifetime_changed` does not, and the messages look almost the same,
+  // which is exactly why the old pattern could not tell them apart. The reason still
+  // reaches the log; it just does not decide anything.
+  test('follows the flag the platform sets', () => {
+    expect(shouldRetryPlatformFailure({ retryable: true })).toBe(true);
+    expect(shouldRetryPlatformFailure({ retryable: false })).toBe(false);
+  });
+
+  // A retry after committed effects is a second execution, not another attempt —
+  // the rule ADR 0006 states, now answerable rather than inferred from timing.
+  test('does not retry work the platform says already landed', () => {
+    expect(shouldRetryPlatformFailure({ retryable: true, admitted: true })).toBe(false);
+  });
+
+  test('retries when nothing had run, and when that is unknown', () => {
+    expect(shouldRetryPlatformFailure({ retryable: true, admitted: false })).toBe(true);
+    expect(shouldRetryPlatformFailure({ retryable: true, admitted: 'unknown' })).toBe(true);
+  });
+
+  // Without details there is nothing to read, so the old rule still answers. It is
+  // the fallback now rather than the decision: a failure that crossed a Durable
+  // Object boundary arrives with its message and without its context.
+  test('falls back to the message when the platform said nothing structured', () => {
+    expect(shouldRetryPlatformFailure(null, 'was interrupted while the runtime connection was closing')).toBe(true);
+    expect(shouldRetryPlatformFailure(null, 'step "install" failed with exit code 1')).toBe(false);
   });
 });
