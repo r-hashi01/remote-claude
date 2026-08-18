@@ -58,7 +58,7 @@ import { REPO_DIR, STATE_DIR, WORKSPACE_DIR } from './workspace';
 
 // Re-exported because these are part of this module's story (the runner contract
 // lives here) while the values themselves are shared with the session path.
-export { REPO_DIR, STATE_DIR } from './workspace';
+export { REPO_DIR, STATE_DIR, WORKSPACE_DIR } from './workspace';
 
 /** How often to mirror a running job's state files into this executor. */
 export const POLL_INTERVAL_MS = 2_000;
@@ -1188,19 +1188,11 @@ export class JobService {
         //                  the largest thing in the tree for no gain.
         //   .npm-cache     stored and restored separately, so a copy here would
         //                  double every continuation's transfer.
-        //   .remote-claude this job's own state, and the reason is not size.
         //
-        // The state directory holds the log, the status file and the result. A
-        // continuation used to restore all three, and it showed: the second turn's
-        // log opened with nineteen lines of the first turn's, because the mirror
-        // reads that file from the top and the file it read was the one that came
-        // back. Worse, the restored status said `completed` and the restored result
-        // was the previous turn's — so the first poll of a continuation could
-        // finalise it instantly with an answer from before it started. That it did
-        // not is a race the runner happened to win, by rewriting the status a second
-        // before the poll read it, and an unbounded output file makes the restore
-        // slower and the race closer.
-        excludes: ['node_modules', '.npm-cache', '.remote-claude'],
+        // The job's own state files are not on this list because they are not in
+        // this directory at all — see STATE_DIR. They used to be, and a continuation
+        // restored them.
+        excludes: ['node_modules', '.npm-cache'],
       });
 
       // Null means no store is configured for this deployment. That is a

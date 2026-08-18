@@ -32,7 +32,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-const STATE_DIR = process.argv[2] ?? '/workspace/.remote-claude';
+const STATE_DIR = process.argv[2] ?? '/var/lib/remote-claude';
 const REPO_DIR = process.env.REPO_DIR ?? '/workspace/repo';
 
 /**
