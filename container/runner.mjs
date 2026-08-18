@@ -325,14 +325,26 @@ function run(name, command, options = {}) {
       lastOutputAt = Date.now();
       const text = chunk.toString();
       output += text;
-      // Before anything is decided about it: no line splitting, no truncation.
-      //
-      // Except the agent's own event stream, which is JSON on stdout and belongs
-      // to the parsed view — the Worker turns it into readable lines there. Thirty
-      // kilobytes of it went past in a two-second local run; a terminal fed that
-      // answers "what is happening" worse than the translated lines do, and costs
-      // more to carry. Liveness for that step is the notice below instead.
-      if (!(options.onLine && stream === 'stdout')) raw(text);
+      /*
+       * Everything, as it arrives: no line splitting, no truncation, no exception.
+       *
+       * The agent's own event stream used to be held back from here on the
+       * grounds that thirty kilobytes of NDJSON answers "what is happening" worse
+       * than the translated lines do. Two things were wrong with that. It left the
+       * terminal view empty for the whole agent step — the longest part of a run
+       * and the part somebody is actually watching — and it did so silently,
+       * because the liveness notice meant to stand in for it was suppressed by the
+       * very output it was standing in for: this line refreshed on stdout that was
+       * never written.
+       *
+       * And the premise was wrong too. Watching a run is not reading a report; the
+       * value is in the movement. Raw output moving is what a terminal is, and it
+       * is worth more than a tidy summary that arrives at the end.
+       *
+       * The translated lines still exist for readers who want the report — the
+       * Worker builds them from the same stdout, into the parsed log.
+       */
+      raw(text);
 
       // Only stdout carries the agent's event stream. stderr is warnings and
       // diagnostics — routing it through the same path made non-JSON lines look
