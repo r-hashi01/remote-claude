@@ -1004,8 +1004,10 @@ describe('carrying a workspace between sandboxes', () => {
     // /workspace is one above it, so asking for gitignore there does nothing.
     expect(sandbox.snapshotted[0]).toMatchObject({
       dir: '/workspace',
-      // The package cache is stored separately, so it is not carried twice.
-      excludes: ['node_modules', '.npm-cache'],
+      // node_modules is reinstalled, the cache is stored separately, and the state
+      // directory is this job's own — a continuation that restored it replayed the
+      // previous turn's log and could have finalised on its result.
+      excludes: ['node_modules', '.npm-cache', '.remote-claude'],
     });
     // node_modules is reinstallable; the conversation is not.
     expect(h.jobs.load(job.id)?.toRecord().workspace).toEqual({ provider: 'fake', id: 'snap-1' });
@@ -1606,5 +1608,39 @@ describe('a package cache that cannot be stored', () => {
       '/workspace/.npm-cache'
     );
     expect(h.logs.all(job.id).join('\n')).toMatch(/193MB, over the 100MB/);
+  });
+});
+
+/**
+ * A continuation starts its own record, not the previous turn's.
+ *
+ * Measured on a real pair: the second turn's log opened with nineteen lines of the
+ * first turn's, `job <first-id>` among them, because the workspace it restored
+ * carried `/workspace/.remote-claude/log.ndjson` and the mirror reads that file from
+ * the top.
+ *
+ * The status file and the result came back the same way, which is the sharper end of
+ * it: a restored `status.json` saying `completed`, next to the previous turn's
+ * `result.json`, is enough for the first poll of a continuation to finish it with an
+ * answer from before it started. The runner rewrites the status about a second before
+ * that poll, so it has been winning.
+ */
+describe('what a stored workspace leaves behind', () => {
+  test('does not include the job state a continuation would inherit', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() })
+    );
+
+    await h.service.tick();
+
+    const workspace = sandbox.snapshotted.find((one) => one.dir === '/workspace');
+    expect(workspace?.excludes).toContain('.remote-claude');
+    // The three names are load-bearing, so they are asserted rather than counted.
+    expect(workspace?.excludes).toEqual(['node_modules', '.npm-cache', '.remote-claude']);
   });
 });

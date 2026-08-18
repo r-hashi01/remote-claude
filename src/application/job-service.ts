@@ -1183,9 +1183,24 @@ export class JobService {
         ttlSeconds: Math.round(policy.retentionMs / 1000),
         // Named rather than inferred: git rules apply only inside a repository,
         // and this directory is one above it.
-        // The package cache is stored separately and restored separately; a copy
-        // inside the workspace would double every continuation's transfer.
-        excludes: ['node_modules', '.npm-cache'],
+        //
+        //   node_modules   reinstalled from the lockfile; carrying it is carrying
+        //                  the largest thing in the tree for no gain.
+        //   .npm-cache     stored and restored separately, so a copy here would
+        //                  double every continuation's transfer.
+        //   .remote-claude this job's own state, and the reason is not size.
+        //
+        // The state directory holds the log, the status file and the result. A
+        // continuation used to restore all three, and it showed: the second turn's
+        // log opened with nineteen lines of the first turn's, because the mirror
+        // reads that file from the top and the file it read was the one that came
+        // back. Worse, the restored status said `completed` and the restored result
+        // was the previous turn's — so the first poll of a continuation could
+        // finalise it instantly with an answer from before it started. That it did
+        // not is a race the runner happened to win, by rewriting the status a second
+        // before the poll read it, and an unbounded output file makes the restore
+        // slower and the race closer.
+        excludes: ['node_modules', '.npm-cache', '.remote-claude'],
       });
 
       // Null means no store is configured for this deployment. That is a

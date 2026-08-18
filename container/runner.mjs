@@ -131,26 +131,24 @@ function write(name, data) {
  * rather than fatal — one that went quiet for four minutes: each was legible only
  * from the output, and only after the fact.
  *
- * Bounded, and it says so when it stops. An unbounded file here is a job's memory
- * consumption decided by how chatty its build is.
+ * Unbounded, on purpose.
+ *
+ * It was capped at eight megabytes, and the cap was aimed at the wrong risk. This
+ * is `appendFileSync` to the container's own disk, not memory — the in-memory copy
+ * a step keeps is `output`, which is truncated separately and always was. What the
+ * cap actually bought was a truncated terminal on precisely the runs worth
+ * watching: a long one. Reading a window of a file costs the same whatever the
+ * file's length, so the size only matters to the disk, and the disk is the
+ * container's to spend on this.
+ *
+ * The rate is knowable rather than mysterious: the agent's event stream runs at
+ * roughly thirty kilobytes per two seconds of tool use, so an hour of solid
+ * agent work is tens of megabytes. If that ever becomes the constraint, the answer
+ * is a rolling window that keeps the tail — not a cliff that stops recording and
+ * leaves the end of a run, which is the part with the outcome in it, missing.
  */
-const MAX_RAW_BYTES = 8_000_000;
-let rawBytes = 0;
-let rawStopped = false;
-
 function raw(text) {
-  if (rawStopped) return;
-  const clean = redact(text);
-  if (rawBytes + clean.length > MAX_RAW_BYTES) {
-    rawStopped = true;
-    appendFileSync(
-      `${STATE_DIR}/output.raw`,
-      `\n[output stopped after ${MAX_RAW_BYTES} bytes; the steps and their exit codes are still recorded]\n`
-    );
-    return;
-  }
-  rawBytes += clean.length;
-  appendFileSync(`${STATE_DIR}/output.raw`, clean);
+  appendFileSync(`${STATE_DIR}/output.raw`, redact(text));
 }
 
 let logSeq = 0;
