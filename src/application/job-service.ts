@@ -58,7 +58,7 @@ import { REPO_DIR, STATE_DIR, WORKSPACE_DIR } from './workspace';
 
 // Re-exported because these are part of this module's story (the runner contract
 // lives here) while the values themselves are shared with the session path.
-export { REPO_DIR, STATE_DIR } from './workspace';
+export { REPO_DIR, STATE_DIR, WORKSPACE_DIR } from './workspace';
 
 /** How often to mirror a running job's state files into this executor. */
 export const POLL_INTERVAL_MS = 2_000;
@@ -1183,8 +1183,15 @@ export class JobService {
         ttlSeconds: Math.round(policy.retentionMs / 1000),
         // Named rather than inferred: git rules apply only inside a repository,
         // and this directory is one above it.
-        // The package cache is stored separately and restored separately; a copy
-        // inside the workspace would double every continuation's transfer.
+        //
+        //   node_modules   reinstalled from the lockfile; carrying it is carrying
+        //                  the largest thing in the tree for no gain.
+        //   .npm-cache     stored and restored separately, so a copy here would
+        //                  double every continuation's transfer.
+        //
+        // The job's own state files are not on this list because they are not in
+        // this directory at all — see STATE_DIR. They used to be, and a continuation
+        // restored them.
         excludes: ['node_modules', '.npm-cache'],
       });
 

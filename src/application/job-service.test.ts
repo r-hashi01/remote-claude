@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { REPO_DIR, STATE_DIR, JobService, type JobServiceDeps } from './job-service';
+import { REPO_DIR, STATE_DIR, WORKSPACE_DIR, JobService, type JobServiceDeps } from './job-service';
 import { Job } from '../domain/job/job';
 import type { ExecutorPolicy } from './ports';
 import {
@@ -1004,7 +1004,9 @@ describe('carrying a workspace between sandboxes', () => {
     // /workspace is one above it, so asking for gitignore there does nothing.
     expect(sandbox.snapshotted[0]).toMatchObject({
       dir: '/workspace',
-      // The package cache is stored separately, so it is not carried twice.
+      // node_modules is reinstalled from the lockfile, and the package cache is
+      // stored separately. The job's own state files need no exclusion: they are
+      // not in this directory at all (see STATE_DIR).
       excludes: ['node_modules', '.npm-cache'],
     });
     // node_modules is reinstallable; the conversation is not.
@@ -1212,7 +1214,7 @@ describe('reading back', () => {
 describe('the repository directory contract', () => {
   test('is where the runner expects to find the checkout', () => {
     expect(REPO_DIR).toBe('/workspace/repo');
-    expect(STATE_DIR).toBe('/workspace/.remote-claude');
+    expect(STATE_DIR).toBe('/var/lib/remote-claude');
   });
 });
 
@@ -1606,5 +1608,41 @@ describe('a package cache that cannot be stored', () => {
       '/workspace/.npm-cache'
     );
     expect(h.logs.all(job.id).join('\n')).toMatch(/193MB, over the 100MB/);
+  });
+});
+
+/**
+ * A continuation starts its own record, not the previous turn's.
+ *
+ * Measured on a real pair: the second turn's log opened with nineteen lines of the
+ * first turn's, `job <first-id>` among them, because the workspace it restored
+ * carried the state directory and the mirror reads that file from the top.
+ *
+ * The status file was the sharper end. A restored `status.json` saying `completed`,
+ * next to the previous turn's `result.json`, is enough for the first poll of a
+ * continuation to finish it with an answer from before it started — avoided only by
+ * the runner rewriting the status about a second before that poll looked.
+ *
+ * The fix is not an exclusion. The state directory is not in the workspace, so there
+ * is nothing to exclude and nothing to remember.
+ */
+describe('what a stored workspace leaves behind', () => {
+  test('cannot include the job state, because it is not in the workspace', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+    await h.service.tick();
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    sandbox.files.set(
+      `${STATE_DIR}/status.json`,
+      JSON.stringify({ phase: 'completed', updatedAt: h.clock.now() })
+    );
+
+    await h.service.tick();
+
+    // Nothing to exclude: the conveyor is not inside the thing being carried.
+    expect(STATE_DIR.startsWith(WORKSPACE_DIR)).toBe(false);
+
+    const workspace = sandbox.snapshotted.find((one) => one.dir === WORKSPACE_DIR);
+    expect(workspace?.excludes).toEqual(['node_modules', '.npm-cache']);
   });
 });
