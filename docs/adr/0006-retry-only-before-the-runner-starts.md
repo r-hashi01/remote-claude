@@ -86,3 +86,43 @@ ADR 0004 で pipeline をコンテナ内に移し、
 
 コメントはこれに気付けない。`src/conventions.test.ts` に
 **sleep タイマーがジョブ予算より長いこと**を検査するガードを置いた。
+
+## Addendum — 2026-08-18: 推測をやめ、プラットフォームに聞く
+
+この ADR は判別を**メッセージのパターン**で行うと決めた。当時はそれしか無かった。
+そしてこのファイル自身が代償を記録している —
+「二番目の文言は実際のジョブを1件失った。パターンが片方の言い回しを知っていて
+他方を知らなかったせいだ」。
+
+SDK は最初から構造化して投げていた。`OperationInterruptedError` /
+`ContainerUnavailableError` / `RPCTransportError` が持っているもの:
+
+| フィールド | 意味 |
+|---|---|
+| `reason` | `runtime_replaced` / `transport_disposed` / `sandbox_lifetime_changed` / `recovery_exhausted` など |
+| `retryable` | **再試行して安全かの答え** |
+| `phase` | どの段で中断を検知したか |
+| `operation` | `command.execute` / `backup.restore` など |
+| `admitted` | **副作用がコンテナに到達したか**（`true` / `false` / `'unknown'`） |
+
+**参照は1箇所も無かった。** 判断は正規表現で、記録に残るのはメッセージだけ。
+コンテナ起動の失敗を1日かけて調べても原因が特定できなかったのはそのためで、
+`reason` の1語があれば「デプロイで差し替わった」のか
+「サンドボックスが破棄された」のかが即座に分かった。
+
+**決定を2つ変える。**
+
+1. **記録する。** `reason` / `phase` / `operation` / `retryable` / `admitted` を
+   ログとジョブの `error` に残す。読む人が最初に聞くのはこれである
+2. **`retryable` で判断する。** 正規表現は**構造が無いときの後退経路**に降格した。
+   DO の境界を越えたエラーは name と message だけを持って到達するので、
+   後退経路は消せない
+
+`admitted` はこの ADR の中心にある問いへの答えである。ここは
+「runner 起動後の再試行はプロンプトの二重実行になる」という理由で境界を引いたが、
+**到達したかどうかは推測するしかなかった**。いまはプラットフォームが答える。
+`admitted: true` なら再試行しない — それは再試行ではなく2回目の実行だから。
+
+層は守っている。SDK を知るのは `infrastructure/sandbox/failure.ts` だけで、
+そこが `PlatformFailureDetails` に翻訳する。domain の規則はその形だけを見るので、
+workerd 無しでテストできる。

@@ -1,3 +1,5 @@
+import type { PlatformFailureDetails } from './platform-failure';
+
 /**
  * How many times to retry a job that failed before its runner started.
  *
@@ -22,6 +24,37 @@ export const MAX_LAUNCH_ATTEMPTS = 3;
  * existed, so nothing had run — and was not retried only because the pattern
  * knew the first phrasing and not the second. A rule that recognises one wording
  * of a platform hiccup and not another is a rule that will keep being surprised.
+ */
+/**
+ * Whether to try again, asked of the platform rather than of its wording.
+ *
+ * The SDK raises structured errors carrying `retryable`, and this reads it. Two
+ * distinctions that message matching could not make: a destroyed sandbox and a
+ * replaced runtime read almost the same and want opposite answers, and an operation
+ * whose effects already landed is not one a retry repeats — it is one a retry
+ * executes twice, which is the line ADR 0006 draws and previously had to guess at
+ * from what had been written to disk.
+ *
+ * Falls back to the message when there is nothing structured to read. That happens:
+ * an error that crossed a Durable Object boundary arrives with its name and message
+ * and without its context, and not every failure comes from the SDK at all.
+ */
+export function shouldRetryPlatformFailure(
+  details: PlatformFailureDetails | null,
+  message = ''
+): boolean {
+  if (!details) return isTransientPlatformError(message);
+  if (details.admitted === true) return false;
+  if (details.retryable !== undefined) return details.retryable;
+  return isTransientPlatformError(message);
+}
+
+/**
+ * The wording rule, kept for failures that arrive without context.
+ *
+ * No longer the decision — see `shouldRetryPlatformFailure`. It stays because it is
+ * the only thing left to read when the structure has been stripped, and because
+ * each pattern here was added by a real job that failed.
  */
 export function isTransientPlatformError(message: string): boolean {
   return /was interrupted while|updating the sandbox runtime|container unavailable|temporarily unavailable|503/i.test(
@@ -127,7 +160,8 @@ export function shouldRetryLostContainer(
 export function shouldRetryLaunch(
   message: string,
   attemptsSoFar: number,
+  details: PlatformFailureDetails | null = null,
   maxAttempts: number = MAX_LAUNCH_ATTEMPTS
 ): boolean {
-  return isTransientPlatformError(message) && attemptsSoFar + 1 < maxAttempts;
+  return shouldRetryPlatformFailure(details, message) && attemptsSoFar + 1 < maxAttempts;
 }

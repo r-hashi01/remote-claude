@@ -27,10 +27,11 @@ import {
 import { redactWindow } from '../domain/redaction/window';
 import { composePullRequest } from '../domain/job/pull-request';
 import { resolveRepository } from '../domain/job/repository';
+import { describePlatformFailure, platformDetails } from '../domain/job/platform-failure';
 import {
-  isTransientPlatformError,
   shouldRetryLaunch,
   shouldRetryLostContainer,
+  shouldRetryPlatformFailure,
   shouldRetrySilentStartup,
 } from '../domain/job/retry';
 import {
@@ -541,10 +542,18 @@ export class JobService {
       await scheduler.scheduleIn(POLL_INTERVAL_MS);
     } catch (error) {
       const message = errorMessage(error);
+      // What the platform said about it, where it said anything: the reason, the
+      // phase, whether it considers a retry safe, and whether the work landed. The
+      // decision below used to be a regular expression over this message, and the
+      // record kept the message alone — a container start failed and cost a day to
+      // investigate for want of the one word that says which failure it was.
+      const platform = platformDetails(error);
+      const said = describePlatformFailure(platform);
+      if (said) this.log(job.id, 'system', said);
 
       // Safe to retry here and only here: the runner has not started, so
       // nothing has run and re-running has no side effects.
-      if (shouldRetryLaunch(message, job.attempts)) {
+      if (shouldRetryLaunch(message, job.attempts, platform)) {
         const attempts = job.attempts + 1;
         running.end(job.id);
         await this.teardown(job.id);
@@ -561,7 +570,9 @@ export class JobService {
         return;
       }
 
-      await this.settle(job.id, 'failed', message);
+      // Kept on the record, not only in the log: the reason a job failed is the
+      // first thing anybody asks it for.
+      await this.settle(job.id, 'failed', said ? `${message} — ${said}` : message);
     }
   }
 
@@ -710,8 +721,13 @@ export class JobService {
         output = ((await runner?.output()) ?? '').trim();
       } catch (error) {
         const message = errorMessage(error);
-        this.log(jobId, 'system', `asking after the runner failed: ${message}`);
-        lookupInterrupted = isTransientPlatformError(message);
+        const said = describePlatformFailure(platformDetails(error));
+        this.log(
+          jobId,
+          'system',
+          `asking after the runner failed: ${message}${said ? ` — ${said}` : ''}`,
+        );
+        lookupInterrupted = shouldRetryPlatformFailure(platformDetails(error), message);
       }
 
       // Whether the container is still the one this job was launched into. The
@@ -831,11 +847,20 @@ export class JobService {
       return false;
     } catch (error) {
       const message = errorMessage(error);
-      this.log(jobId, 'system', `log mirroring failed: ${message}`);
+      const details = platformDetails(error);
+      const said = describePlatformFailure(details);
+      // The reason belongs here as much as anywhere: this is the first call to
+      // notice a container going away, and what it noticed decides whether the job
+      // is requeued or failed.
+      this.log(
+        jobId,
+        'system',
+        `log mirroring failed: ${message}${said ? ` — ${said}` : ''}`,
+      );
       // Flush immediately: a buffered report of a logging failure is a report
       // that disappears exactly when it is needed.
       this.deps.logs.flush(jobId);
-      return isTransientPlatformError(message);
+      return shouldRetryPlatformFailure(details, message);
     }
   }
 

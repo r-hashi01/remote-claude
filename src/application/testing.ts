@@ -427,9 +427,15 @@ export class FakeSandbox implements SandboxSession {
   readonly processes = new Map<string, { alive: boolean; output: string }>();
   /** Set to make starting one fail, the way a busy platform does. */
   startProcessError: string | null = null;
+  /**
+   * The same, but as the object the adapter raises once it has read the platform's
+   * error — so a test can arrange a failure that carries a reason.
+   */
+  startProcessErrorObject: Error | null = null;
 
   async startProcess(command: string, options: StartProcessOptions): Promise<SandboxProcess> {
     this.commands.push(command);
+    if (this.startProcessErrorObject) throw this.startProcessErrorObject;
     if (this.startProcessError) throw new Error(this.startProcessError);
     this.processes.set(options.id, { alive: true, output: '' });
     return this.process(options.id);
