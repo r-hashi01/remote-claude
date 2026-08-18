@@ -148,6 +148,9 @@ export class Job {
     job.record.continues = before.id;
     job.record.restoreFrom = before.workspace;
     job.record.resumeSession = before.claudeSessionId;
+    // One further along the same conversation. Counted here because this is the only
+    // place that knows both turns.
+    job.record.turn = (before.turn ?? 1) + 1;
     return job;
   }
 
@@ -234,6 +237,11 @@ export class Job {
   /** The last phase seen, which outlives the file it was read from. */
   get phase(): string | undefined {
     return this.record.phase;
+  }
+
+  /** Which turn of the conversation this is. One unless it continues another. */
+  get turn(): number {
+    return this.record.turn ?? 1;
   }
 
   get finishedAt(): number | undefined {

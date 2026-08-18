@@ -390,7 +390,8 @@ Every call needs `Authorization: Bearer $REMOTE_CLAUDE_TOKEN` except `/health`.
 | `POST` | `/jobs` | Start a job. Returns the record with `202` |
 | `GET` | `/jobs?limit=20&summary=1` | Recent jobs. `summary=1` drops each step's captured output |
 | `GET` | `/jobs/:id` | One job, including `result` and `usage` |
-| `GET` | `/jobs/:id/logs?since=<seq>` | Logs. `format=text` for plain text |
+| `GET` | `/jobs/:id/logs?since=<seq>` | One page: `logs`, `nextSince`, `hasMore`, `turn`. `format=text` for plain text |
+| `GET` | `/jobs/:id/logs?tail=<n>` | The last `n` lines, where a failure explains itself |
 | `GET` | `/jobs/:id/diff` | The patch, or `404` while there is none |
 | `GET` | `/jobs/:id/output?offset=<n>` | One window of what the commands printed |
 | `GET` | `/jobs/:id/output/stream?offset=<n>` | The same, as SSE, as it is produced |

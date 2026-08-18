@@ -1,5 +1,5 @@
 import { InMemoryJobStore, InMemoryLogStore } from './testing';
-import { describeJobStore, describeLogStore } from './store-contract';
+import { describeJobStore, describeLogPaging, describeLogStore } from './store-contract';
 
 /**
  * The fakes, against the contract the real stores are held to.
@@ -13,5 +13,9 @@ describeJobStore('the in-memory store', async (use) => {
 });
 
 describeLogStore('the in-memory store', async (use) => {
+  await use(new InMemoryLogStore());
+});
+
+describeLogPaging('the in-memory store', async (use) => {
   await use(new InMemoryLogStore());
 });

@@ -109,6 +109,10 @@ export class HttpJobGateway implements JobGateway {
     return this.call<LogPage>(`/jobs/${encodeURIComponent(jobId)}/logs?since=${since}`);
   }
 
+  logTail(jobId: string, limit: number): Promise<LogPage> {
+    return this.call<LogPage>(`/jobs/${encodeURIComponent(jobId)}/logs?tail=${limit}`);
+  }
+
   output(jobId: string, offset: number, limit = 65_536): Promise<OutputWindow> {
     return this.call<OutputWindow>(
       `/jobs/${encodeURIComponent(jobId)}/output?offset=${offset}&limit=${limit}`

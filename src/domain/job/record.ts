@@ -170,6 +170,17 @@ export interface JobRecord {
   restoreFrom?: WorkspaceRef;
   /** The job this one continues. */
   continues?: string;
+  /**
+   * Which turn of a conversation this job is: 1 unless it continues another.
+   *
+   * Stated rather than derived, because deriving it means walking the chain of
+   * `continues` links backwards — a query per turn, from a caller that only wanted
+   * to label a line. It travels onto each log line for the same reason: a consumer
+   * showing several turns together was finding the boundaries by searching the text
+   * for `job <id>`, which is prose parsing and breaks silently when the wording
+   * moves.
+   */
+  turn?: number;
   /** The conversation this job resumes, rather than starting a new one. */
   resumeSession?: string;
   /**
@@ -243,6 +254,16 @@ export type LogLine = {
   ts: number;
   stream: 'system' | 'stdout' | 'stderr';
   line: string;
+  /**
+   * Which turn of the conversation produced it — 1 unless the job continues another.
+   *
+   * Stamped on the way out rather than stored: a job is one turn, so the column would
+   * hold the same number on every row of it. It is on the line because a consumer
+   * showing turns together needs it once the lines are one list, and the alternative
+   * was searching the text for `job <id>` — prose parsing, which breaks the day the
+   * wording moves and then reads the whole history as a single turn.
+   */
+  turn?: number;
 };
 
 export type LogStream = LogLine['stream'];

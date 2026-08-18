@@ -136,6 +136,16 @@ export class InMemoryLogStore implements LogStore {
     return (this.lines.get(jobId) ?? []).filter((line) => line.seq > since).slice(0, limit);
   }
 
+  hasMore(jobId: string, since: number): boolean {
+    this.flush(jobId);
+    return (this.lines.get(jobId) ?? []).some((line) => line.seq > since);
+  }
+
+  readTail(jobId: string, limit: number): LogLine[] {
+    this.flush(jobId);
+    return (this.lines.get(jobId) ?? []).slice(-limit);
+  }
+
   removeFor(jobId: string): void {
     this.lines.delete(jobId);
     this.pending.delete(jobId);

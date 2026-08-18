@@ -171,3 +171,58 @@ export function describeLogStore(name: string, withStore: WithStore<LogStore>): 
       }));
   });
 }
+
+/**
+ * Reading the tail of a log, and knowing when there is more.
+ *
+ * Held to the same contract as everything else here, because the reason it exists is
+ * a real loss: a job died at `install` with `npm error ECONNRESET`, and the consumer
+ * showed a page ending in "lint ok" — the cause was on the second page and nothing
+ * said a second page existed.
+ */
+export function describeLogPaging(name: string, withStore: WithStore<LogStore>): void {
+  describe(`${name} paging a log`, () => {
+    const twenty = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+
+    test('says when a page is not the end', () =>
+      withStore((store) => {
+        for (const line of twenty) store.append('job', 'stdout', line);
+        store.flush('job');
+
+        const page = store.read('job', 0, 5);
+        expect(page.map((line) => line.line)).toEqual(twenty.slice(0, 5));
+        // The question a caller cannot answer from a full page: is that all of it?
+        expect(store.hasMore('job', page.at(-1)?.seq ?? 0)).toBe(true);
+      }));
+
+    test('says when it is', () =>
+      withStore((store) => {
+        for (const line of twenty) store.append('job', 'stdout', line);
+        store.flush('job');
+
+        const page = store.read('job', 0, 100);
+        expect(page).toHaveLength(20);
+        expect(store.hasMore('job', page.at(-1)?.seq ?? 0)).toBe(false);
+      }));
+
+    // Where the reason usually is. A caller that wants the end should be able to ask
+    // for it rather than walk twelve pages and give up before arriving.
+    test('hands back the end when asked for the end', () =>
+      withStore((store) => {
+        for (const line of twenty) store.append('job', 'stdout', line);
+        store.flush('job');
+
+        const tail = store.readTail('job', 3);
+
+        expect(tail.map((line) => line.line)).toEqual(['line 18', 'line 19', 'line 20']);
+      }));
+
+    test('reads in order even when the whole log is shorter than the tail asked for', () =>
+      withStore((store) => {
+        store.append('job', 'stdout', 'only');
+        store.flush('job');
+
+        expect(store.readTail('job', 50).map((line) => line.line)).toEqual(['only']);
+      }));
+  });
+}

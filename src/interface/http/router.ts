@@ -92,12 +92,27 @@ export async function route(request: Request, env: Env, deps: RouteDeps): Promis
 
     if (suffix === '/logs' && method === 'GET') {
       const since = Number.parseInt(url.searchParams.get('since') ?? '0', 10) || 0;
-      const lines = await jobs.getLogs(jobId, since);
+      const rawTail = url.searchParams.get('tail');
+      // `tail` asks for the end, which is where a failure explains itself. Bounded by
+      // the same ceiling as a page: this is a page too, read from the other end.
+      const tail =
+        rawTail === null
+          ? undefined
+          : Math.min(Math.max(Number.parseInt(rawTail, 10) || 0, 1), 2_000);
+
+      const page = await jobs.getLogPage(jobId, {
+        since,
+        ...(tail === undefined ? {} : { tail }),
+      });
+
       if (url.searchParams.get('format') === 'text') {
-        const text = lines.map((line) => `[${line.stream}] ${line.line}`).join('\n');
+        const text = page.logs.map((line) => `[${line.stream}] ${line.line}`).join('\n');
         return new Response(text, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
       }
-      return Response.json({ logs: lines, nextSince: lines.at(-1)?.seq ?? since });
+      // `hasMore` because a full page and a final page used to be the same answer,
+      // and a consumer that read one page showed a job ending in "lint ok" that had
+      // died at install on the page after.
+      return Response.json(page);
     }
 
     // What the commands printed, as they printed it. The parsed log says where a

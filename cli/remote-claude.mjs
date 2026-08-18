@@ -48,6 +48,7 @@ remote-claude — run Claude Code on Cloudflare, not on your Mac
                                         answer a finished job and carry on
   remote-claude status <job-id>        show a job's status and summary
   remote-claude logs <job-id> [-f]     print logs (-f/--follow to tail)
+  remote-claude logs <job-id> --tail N  print the last N lines
   remote-claude terminal <job-id>      watch what the commands print, live
   remote-claude diff <job-id>          print the unified diff
   remote-claude apply <job-id>         apply that diff to the local worktree
@@ -370,14 +371,28 @@ async function cmdLogs(client, args) {
     await follow(client, id, true);
     return 0;
   }
+  // The end, when that is what was asked for. A failure explains itself there, and
+  // paging forward to reach it is a loop somebody abandons halfway.
+  const tail = args.includes('--tail')
+    ? Number.parseInt(args[args.indexOf('--tail') + 1] ?? '200', 10) || 200
+    : null;
+  if (tail !== null) {
+    const page = await client.getLogTail(id, tail);
+    for (const entry of page.logs) process.stdout.write(entry.line + '\n');
+    return 0;
+  }
+
   // Paged rather than asking the executor for one text blob: the same call the
   // follow path uses, so there is one way logs are fetched and one place a
   // change to that has to land.
+  //
+  // `hasMore` ends it rather than an empty page: a page that filled exactly to the
+  // limit used to look like the last one.
   for (let since = 0; ; ) {
     const page = await client.getLogs(id, since);
-    if (page.logs.length === 0) break;
     for (const entry of page.logs) process.stdout.write(entry.line + '\n');
     since = page.nextSince;
+    if (!page.hasMore) break;
   }
   return 0;
 }

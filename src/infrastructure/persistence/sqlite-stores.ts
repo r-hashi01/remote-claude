@@ -213,6 +213,33 @@ export class SqliteLogStore implements LogStore {
       .toArray();
   }
 
+  hasMore(jobId: string, since: number): boolean {
+    // Existence, not a count: the answer is the same and the work stops at the first
+    // row. A count of a log nobody asked to count is work spent on the wrong question.
+    return (
+      this.sql
+        .exec<{ one: number }>(
+          'SELECT 1 AS one FROM logs WHERE job_id = ? AND seq > ? LIMIT 1',
+          jobId,
+          since
+        )
+        .toArray().length > 0
+    );
+  }
+
+  readTail(jobId: string, limit: number): LogLine[] {
+    // Taken from the end and turned back the right way round. The index is on
+    // (job_id, seq), so descending costs what ascending costs.
+    return this.sql
+      .exec<LogLine>(
+        'SELECT seq, ts, stream, line FROM logs WHERE job_id = ? ORDER BY seq DESC LIMIT ?',
+        jobId,
+        limit
+      )
+      .toArray()
+      .reverse();
+  }
+
   removeFor(jobId: string): void {
     this.sql.exec('DELETE FROM logs WHERE job_id = ?', jobId);
     this.pending.delete(jobId);

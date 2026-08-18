@@ -8,7 +8,11 @@ import {
   SqliteLogStore,
 } from './sqlite-stores';
 import { R2ArtifactStore } from './r2-artifact-store';
-import { describeJobStore, describeLogStore } from '../../application/store-contract';
+import {
+  describeJobStore,
+  describeLogPaging,
+  describeLogStore,
+} from '../../application/store-contract';
 
 /**
  * The stores, against the storage they were written for.
@@ -288,3 +292,5 @@ describe('the artifact store', () => {
  */
 describeJobStore('the SQLite store', (use) => inStorage((sql) => use(new SqliteJobStore(sql))));
 describeLogStore('the SQLite store', (use) => inStorage((sql) => use(new SqliteLogStore(sql))));
+
+describeLogPaging('the SQLite store', (use) => inStorage((sql) => use(new SqliteLogStore(sql))));
