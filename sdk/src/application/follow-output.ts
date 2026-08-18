@@ -31,6 +31,17 @@ export interface FollowOptions {
  * and which stream each came from. This answers what is happening: the bytes the
  * commands produced, arriving as they are produced.
  *
+ * **What that includes.** Everything the commands printed, the agent's own event
+ * stream among it. During the agent step that is `stream-json` on stdout, so a
+ * terminal fed this shows JSON rather than prose for the longest part of a run.
+ * That is the trade, made deliberately: it was held back once and the step went
+ * silent for minutes, which is worse than verbose — watching a run is not reading a
+ * report, and the value is in the movement.
+ *
+ * If prose is what you want, `getLogs` has it: the executor translates the same
+ * events into `· Read acp.ts` lines there. The two views are for different
+ * questions and neither replaces the other.
+ *
  * Resolves when the job finishes, with its status. It rejects only if the stream
  * itself failed; a job that failed is an outcome, and comes back as one.
  */

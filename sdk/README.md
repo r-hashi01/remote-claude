@@ -51,6 +51,12 @@ parsed lines — the step markers, and which stream each came from — and answe
 **where a run is up to**. `followOutput` gives the bytes the commands produced,
 unsplit and untruncated, and answers **what is happening**.
 
+That includes the agent's own event stream, which is `stream-json` — so during the
+agent step, the longest part of a run, a terminal fed this shows JSON rather than
+prose. Deliberate: it was held back once and the step went silent for minutes, which
+is worse than verbose. `getLogs` carries the translated form (`· Read acp.ts`) for a
+reader who wants the report instead of the movement.
+
 ```ts
 const outcome = await rc.followOutput(job.id, {
   onChunk: (text, offset) => process.stdout.write(text),
