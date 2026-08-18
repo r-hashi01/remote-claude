@@ -44,6 +44,33 @@ A failed job still carries `result.steps` — the commands the executor ran and
 what each printed — which is usually what a reader wants from a failure. The
 reason it failed is on `error`, not inside `result`.
 
+## Reading a log
+
+```ts
+for (let since = 0; ; ) {
+  const page = await rc.getLogs(id, since);
+  for (const line of page.logs) show(line);       // `line.turn` says which turn
+  since = page.nextSince;
+  if (!page.hasMore) break;                       // not "if the page was empty"
+}
+```
+
+**Stop on `hasMore`, not on an empty page.** A page that filled exactly to the limit
+looks like the last one, and a consumer that treated it as the last one reported a
+job as ending in "lint ok" when it had died at install with `npm error ECONNRESET` on
+the page after.
+
+When the question is why something failed, ask for the end directly:
+
+```ts
+const tail = await rc.getLogTail(id, 200);
+```
+
+`line.turn` is which turn of the conversation produced the line — 1 unless the job
+continues another. Read it rather than looking for a marker in the text: a view that
+found turn boundaries by searching for `job <id>` breaks silently the day that line
+is reworded, and then the whole history reads as one turn.
+
 ## Watching it happen
 
 Two views, and they answer different questions. `waitForJob`'s `onLog` gives
@@ -144,7 +171,8 @@ await rc.listJobs(1); // /health is unauthenticated, so this is what proves the 
 | `startJob(input)` | Queue a job. Returns as soon as it is accepted |
 | `getJob(id)` | The full record, including `result` and `usage` |
 | `listJobs(limit?)` | Recent jobs, newest first, without step output |
-| `getLogs(id, since?)` | One page of logs; feed `nextSince` back in |
+| `getLogs(id, since?)` | One page of logs; feed `nextSince` back in, and stop on `hasMore: false` |
+| `getLogTail(id, limit?)` | The last lines — where a failure explains itself |
 | `getDiff(id)` | The patch, or `null` while there is not one |
 | `continueJob(id, input)` | A follow-up turn on a finished job: same branch, same conversation |
 | `cancelJob(id)` | Ask the executor to stop |

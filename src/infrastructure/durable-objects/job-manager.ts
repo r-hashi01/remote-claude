@@ -120,6 +120,14 @@ export class JobManager extends DurableObject<Env> {
     return this.service.listJobSummaries(limit);
   }
 
+  /** A page, with whether there is more and which turn it belongs to. */
+  async getLogPage(
+    id: string,
+    options: { since?: number; limit?: number; tail?: number } = {},
+  ): Promise<{ logs: LogLine[]; nextSince: number; hasMore: boolean; turn: number }> {
+    return this.service.getLogPage(id, options);
+  }
+
   async getLogs(id: string, since = 0, limit = 2000): Promise<LogLine[]> {
     return this.service.getLogs(id, since, limit);
   }

@@ -181,6 +181,13 @@ export interface JobRecord {
     [detail: string]: string | number | boolean | null | undefined;
   };
   /**
+   * Which turn of the conversation this job is: 1 unless it continues another.
+   *
+   * The same number that appears on each of its log lines, for a view that shows one
+   * job at a time.
+   */
+  turn?: number;
+  /**
    * What the runner last said it was doing: `installing`, `running`, `checking`,
    * and so on.
    *
@@ -283,6 +290,14 @@ export interface LogLine {
   ts: number;
   stream: LogStream;
   line: string;
+  /**
+   * Which turn of the conversation produced it — 1 unless the job continues another.
+   *
+   * Read this rather than looking for a marker in the text. A consumer was finding
+   * turn boundaries by searching for `job <id>`, which breaks silently the day the
+   * executor rewords that line — and then a whole history reads as one turn.
+   */
+  turn?: number;
 }
 
 /**
@@ -311,6 +326,16 @@ export interface LogPage {
   logs: LogLine[];
   /** Pass back as `since` to continue where this page ended. */
   nextSince: number;
+  /**
+   * Whether anything follows `nextSince`.
+   *
+   * Read it. A full page and a final page are otherwise the same answer, and a
+   * consumer that stopped at the first one reported a job as ending in "lint ok"
+   * when it had died at install with `npm error ECONNRESET` on the page after.
+   */
+  hasMore: boolean;
+  /** Which turn of the conversation this page belongs to. 1 unless it continues. */
+  turn?: number;
 }
 
 /** Did this job actually change anything? */

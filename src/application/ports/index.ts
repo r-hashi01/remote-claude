@@ -47,6 +47,25 @@ export interface LogStore {
   append(jobId: string, stream: LogStream, line: string): void;
   flush(jobId: string): void;
   read(jobId: string, since: number, limit: number): LogLine[];
+
+  /**
+   * Whether anything follows the cursor.
+   *
+   * A full page and a final page look identical, so a caller had to guess — and one
+   * guessed wrong in a way that mattered: a job died at `install` with
+   * `npm error ECONNRESET`, and the view showed a page ending in "lint ok" because
+   * nothing said the cause was on the next one.
+   */
+  hasMore(jobId: string, since: number): boolean;
+
+  /**
+   * The last `limit` lines, in order.
+   *
+   * Because the end is where a failure explains itself, and walking to it a page at
+   * a time is a loop a caller can abandon halfway — which is what happened.
+   */
+  readTail(jobId: string, limit: number): LogLine[];
+
   removeFor(jobId: string): void;
 }
 

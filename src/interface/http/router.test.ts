@@ -169,19 +169,47 @@ describe('one job', () => {
     expect((await route2(get('/jobs/job-1/diff'), fake)).status).toBe(404);
   });
 
-  test('logs come back with where to continue from', async () => {
-    const lines = [{ seq: 7, ts: 1, stream: 'stdout', line: 'hello' }];
-    const { env: fake } = env({ getLogs: async () => lines });
+  test('logs come back with where to continue from, and whether to', async () => {
+    const lines = [{ seq: 7, ts: 1, stream: 'stdout', line: 'hello', turn: 1 }];
+    const { env: fake } = env({
+      getLogPage: async () => ({ logs: lines, nextSince: 7, hasMore: true, turn: 1 }),
+    });
 
+    // `hasMore` is the point: a full page and a final page used to be the same
+    // answer, and a consumer that read one page reported a job's outcome from the
+    // middle of it.
     await expect((await route2(get('/jobs/job-1/logs?since=3'), fake)).json()).resolves.toEqual({
       logs: lines,
       nextSince: 7,
+      hasMore: true,
+      turn: 1,
     });
+  });
+
+  test('the end of a log can be asked for directly', async () => {
+    const asked: unknown[] = [];
+    const { env: fake } = env({
+      getLogPage: async (_id: string, options: unknown) => {
+        asked.push(options);
+        return { logs: [], nextSince: 0, hasMore: false, turn: 1 };
+      },
+    });
+
+    await route2(get('/jobs/job-1/logs?tail=50'), fake);
+
+    // Where the reason usually is. Walking pages to reach it is a loop a caller can
+    // abandon halfway, and one did.
+    expect(asked).toEqual([{ since: 0, tail: 50 }]);
   });
 
   test('logs can be plain text for a terminal', async () => {
     const { env: fake } = env({
-      getLogs: async () => [{ seq: 1, ts: 1, stream: 'system', line: 'started' }],
+      getLogPage: async () => ({
+        logs: [{ seq: 1, ts: 1, stream: 'system', line: 'started', turn: 1 }],
+        nextSince: 1,
+        hasMore: false,
+        turn: 1,
+      }),
     });
     const answer = await route2(get('/jobs/job-1/logs?format=text'), fake);
 

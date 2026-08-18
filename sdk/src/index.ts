@@ -57,6 +57,14 @@ export function createClient(config: ExecutorConfig) {
     listJobs: (limit = 20) => gateway.list(limit),
     cancelJob: (jobId: string) => gateway.cancel(jobId),
     getLogs: (jobId: string, since = 0) => gateway.logs(jobId, since),
+    /**
+     * The last lines of a job's log.
+     *
+     * For the common question — why did this fail — which is answered at the end.
+     * Reading forward to find out means a loop, and a loop that gives up early
+     * reports the middle of a run as its outcome.
+     */
+    getLogTail: (jobId: string, limit = 200) => gateway.logTail(jobId, limit),
     getDiff: (jobId: string) => gateway.getDiff(jobId),
     /**
      * One window of what the commands printed, by byte offset.
@@ -149,6 +157,14 @@ export function getLogs(config: ExecutorConfig, jobId: string, since = 0): Promi
  * continuation's patch includes the turns before it. `JobGateway.getDiff` has
  * the rest of the contract, including what the base is pinned to.
  */
+export function getLogTail(
+  config: ExecutorConfig,
+  jobId: string,
+  limit = 200
+): Promise<LogPage> {
+  return new HttpJobGateway(config).logTail(jobId, limit);
+}
+
 export function getDiff(config: ExecutorConfig, jobId: string): Promise<string | null> {
   return new HttpJobGateway(config).getDiff(jobId);
 }

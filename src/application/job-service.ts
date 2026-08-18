@@ -180,8 +180,41 @@ export class JobService {
     return this.deps.jobs.listRecent(limit).map((job) => job.toSummary());
   }
 
+  /**
+   * A page of a job's log, and enough to know what to do next.
+   *
+   * `hasMore` because a full page and a final page used to look identical, and a
+   * consumer that stopped reading at the first one showed a job ending in "lint ok"
+   * when it had died at install with `npm error ECONNRESET` on the page after.
+   *
+   * `tail` because the end is where a failure explains itself, and walking to it a
+   * page at a time is a loop a caller can abandon halfway — which is what happened.
+   *
+   * `turn` on every line because a consumer showing several turns together was
+   * finding the boundaries by searching the text for `job <id>`. That is prose
+   * parsing: it breaks silently the day the wording changes, and then the whole
+   * history reads as one turn.
+   */
+  getLogPage(
+    id: string,
+    { since = 0, limit = 2_000, tail }: { since?: number; limit?: number; tail?: number } = {},
+  ): { logs: LogLine[]; nextSince: number; hasMore: boolean; turn: number } {
+    const { logs, jobs } = this.deps;
+    const turn = jobs.load(id)?.turn ?? 1;
+
+    const lines = tail === undefined ? logs.read(id, since, limit) : logs.readTail(id, tail);
+    const nextSince = lines.at(-1)?.seq ?? since;
+
+    return {
+      logs: lines.map((line) => ({ ...line, turn })),
+      nextSince,
+      hasMore: logs.hasMore(id, nextSince),
+      turn,
+    };
+  }
+
   getLogs(id: string, since: number, limit: number): LogLine[] {
-    return this.deps.logs.read(id, since, limit);
+    return this.getLogPage(id, { since, limit }).logs;
   }
 
   getPatch(id: string): Promise<string | null> {

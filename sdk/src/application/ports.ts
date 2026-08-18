@@ -25,6 +25,14 @@ export interface JobGateway {
   list(limit: number): Promise<JobSummary[]>;
   cancel(jobId: string): Promise<void>;
   logs(jobId: string, since: number): Promise<LogPage>;
+
+  /**
+   * The last `limit` lines of a job's log.
+   *
+   * Because the end is where a failure explains itself, and paging to it is a loop
+   * a caller can abandon halfway — which is how a job's real cause went unread.
+   */
+  logTail(jobId: string, limit: number): Promise<LogPage>;
   /**
    * The patch, or null while there is not one.
    *

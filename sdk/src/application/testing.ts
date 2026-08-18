@@ -84,7 +84,18 @@ export class FakeJobGateway implements JobGateway {
   async logs(_jobId: string, since: number): Promise<LogPage> {
     this.calls.push(`logs:${since}`);
     const logs = this.lines.filter((line) => line.seq > since);
-    return { logs, nextSince: logs.at(-1)?.seq ?? since };
+    return {
+      logs,
+      nextSince: logs.at(-1)?.seq ?? since,
+      // The same answer the executor gives: is that all of it?
+      hasMore: this.lines.some((line) => line.seq > (logs.at(-1)?.seq ?? since)),
+    };
+  }
+
+  async logTail(_jobId: string, limit: number): Promise<LogPage> {
+    this.calls.push('logTail');
+    const logs = this.lines.slice(-limit);
+    return { logs, nextSince: logs.at(-1)?.seq ?? 0, hasMore: false };
   }
 
   /** What the commands printed. A test appends to it; reads window it by offset. */
