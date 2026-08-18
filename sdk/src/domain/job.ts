@@ -291,6 +291,10 @@ export interface LogLine {
  * Bytes as the commands produced them — unsplit and untruncated, which is the
  * difference from `LogPage`. That answers where a run is up to; this answers what is
  * happening.
+ *
+ * Includes the agent's own event stream, which is JSON: during the agent step a
+ * terminal fed this shows `stream-json` rather than prose. `LogPage` carries the
+ * translated form of the same events for a reader who wants the report.
  */
 export interface OutputWindow {
   /** The output, already redacted. Empty when nothing new has arrived. */

@@ -1,6 +1,6 @@
 {
   "name": "@r-hashi01/remote-claude-client",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Typed client for the remote-claude job API",
   "license": "MIT",
   "type": "module",
