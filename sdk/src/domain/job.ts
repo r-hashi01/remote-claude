@@ -119,6 +119,15 @@ export interface JobRecord {
   startedAt?: number;
   finishedAt?: number;
   /** Present on status=failed. Redacted by the executor. */
+  /**
+   * Why it failed. Redacted.
+   *
+   * Carries the platform's own report when the platform was the cause —
+   * `code=…`, `context={…}`, and the SDK's `suggestion` and documentation link,
+   * in its words rather than a summary. A clone that failed during a runtime
+   * replacement used to lose all of that to a friendlier sentence; both are there
+   * now.
+   */
   error?: string;
   /** Set once the sandbox has been reclaimed. */
   sandboxDestroyed?: boolean;

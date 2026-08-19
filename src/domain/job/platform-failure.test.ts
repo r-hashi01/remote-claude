@@ -139,3 +139,60 @@ describe('the two fields a decision needs', () => {
     expect(reportedAdmitted(report)).toBeUndefined();
   });
 });
+
+/**
+ * A report that survives being wrapped.
+ *
+ * The clone path replaces the platform's error with one of its own, because git's
+ * message names a URL and a credential and says nothing about which of the two
+ * plausible causes it is — so the wrapper says both. Useful, and it threw the
+ * platform's report away: `code=` reached the log for every failure except that one.
+ *
+ * Wrapping is the right thing there. Losing what was wrapped is not, and `cause` is
+ * where the original belongs.
+ */
+describe('a platform report inside a wrapper', () => {
+  function sdkStyle(): Error {
+    const error = new Error('git.clone was interrupted');
+    return Object.assign(error, {
+      toJSON: () => ({
+        name: 'OperationInterruptedError',
+        message: error.message,
+        code: 'OPERATION_INTERRUPTED',
+        context: { reason: 'runtime_replaced', retryable: true },
+        operation: 'git.clone',
+      }),
+    });
+  }
+
+  test('is found through cause', () => {
+    const wrapped = new Error('cloning … failed: git.clone was interrupted', {
+      cause: sdkStyle(),
+    });
+
+    expect(platformReport(wrapped)).toMatchObject({
+      code: 'OPERATION_INTERRUPTED',
+      operation: 'git.clone',
+      context: { reason: 'runtime_replaced', retryable: true },
+    });
+  });
+
+  test('is found through more than one wrapper', () => {
+    const inner = new Error('inner', { cause: sdkStyle() });
+    const outer = new Error('outer', { cause: inner });
+
+    expect(platformReport(outer)?.code).toBe('OPERATION_INTERRUPTED');
+  });
+
+  // A chain that loops must not become a loop here.
+  test('does not follow a cause that points at itself', () => {
+    const looped = new Error('round and round');
+    (looped as { cause?: unknown }).cause = looped;
+
+    expect(platformReport(looped)).toBeNull();
+  });
+
+  test('is still absent when nothing in the chain is one', () => {
+    expect(platformReport(new Error('outer', { cause: new Error('inner') }))).toBeNull();
+  });
+});

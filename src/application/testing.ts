@@ -361,6 +361,8 @@ export class FakeSandbox implements SandboxSession {
   cloneCount = 0;
   /** Set to make the next clone fail, as a missing branch or lost access would. */
   cloneError: string | null = null;
+  /** The same, as the platform's own error object — so a test can carry a report. */
+  cloneErrorObject: Error | null = null;
   execError: string | null = null;
   private readonly execScripts: ExecScript[] = [];
 
@@ -400,6 +402,7 @@ export class FakeSandbox implements SandboxSession {
   }
 
   async cloneRepository(repoUrl: string, options: { branch?: string }): Promise<void> {
+    if (this.cloneErrorObject) throw this.cloneErrorObject;
     if (this.cloneError) throw new Error(this.cloneError);
     this.cloned = { repo: repoUrl, branch: options.branch };
     this.cloneCount += 1;

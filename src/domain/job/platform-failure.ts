@@ -42,8 +42,28 @@ export interface PlatformReport {
  * flattened anything unlisted.
  */
 export function platformReport(error: unknown): PlatformReport | null {
-  if (typeof error !== 'object' || error === null) return null;
+  // Through wrappers, because some paths add a message worth having. The clone path
+  // does: git's own error names a URL and a credential and says nothing about which
+  // of the two plausible causes it is, so the wrapper names both. That wrapping was
+  // replacing the platform's error rather than carrying it, and `code=` reached the
+  // log for every failure except the one that path produced.
+  const seen = new Set<unknown>();
+  let candidate: unknown = error;
 
+  while (typeof candidate === 'object' && candidate !== null && !seen.has(candidate)) {
+    seen.add(candidate);
+
+    const report = readReport(candidate);
+    if (report) return report;
+
+    candidate = (candidate as { cause?: unknown }).cause;
+  }
+
+  return null;
+}
+
+/** One error's report, if it has one. */
+function readReport(error: object): PlatformReport | null {
   const candidate = error as { toJSON?: unknown };
   if (typeof candidate.toJSON !== 'function') return null;
 
