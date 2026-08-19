@@ -512,9 +512,14 @@ export class JobService {
           // about which of the two plausible causes it is. Access is confirmed
           // before a custom repository is accepted, so by here the branch is the
           // likelier one — but name both rather than guess.
+          // `cause` carries the platform's error rather than replacing it. Without
+          // it this was the one failure that lost its `code` and `context`: the
+          // message here is worth having, and it was being paid for with everything
+          // the platform had said.
           throw new Error(
             `cloning ${job.repo} at branch "${job.baseBranch}" failed: ${errorMessage(error)}. ` +
               'Check that the branch exists and that the GitHub App installation includes this repository.',
+            { cause: error },
           );
         }
       }

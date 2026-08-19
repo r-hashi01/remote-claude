@@ -1739,3 +1739,40 @@ describe('a failure the platform explained', () => {
     expect(h.jobs.load(job.id)?.status).toBe('failed');
   });
 });
+
+/**
+ * The clone failure keeps what the platform said about it.
+ *
+ * It was the one that did not. The path wraps git's error in a message naming both
+ * plausible causes — a missing branch or an installation that does not include the
+ * repository — which is worth having, and it was replacing the platform's report
+ * rather than carrying it. So `code=` reached the log for every failure except this
+ * one, which is the failure most likely to be a platform hiccup during a rollout.
+ */
+describe('a clone that failed on the platform', () => {
+  test('reports the code and context underneath the friendlier message', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+
+    const sandbox = h.sandboxes.get(`rc-${job.id}`);
+    const platform = new Error('git.clone was interrupted');
+    sandbox.cloneErrorObject = Object.assign(platform, {
+      toJSON: () => ({
+        name: 'OperationInterruptedError',
+        message: platform.message,
+        code: 'OPERATION_INTERRUPTED',
+        operation: 'git.clone',
+        context: { reason: 'sandbox_lifetime_changed', retryable: false },
+      }),
+    });
+
+    await h.service.tick();
+
+    const record = h.jobs.load(job.id)?.toRecord();
+    expect(record?.status).toBe('failed');
+    // Both halves: the sentence a person needs, and the platform's own words.
+    expect(record?.error).toMatch(/Check that the branch exists/);
+    expect(record?.error).toMatch(/code=OPERATION_INTERRUPTED/);
+    expect(record?.error).toMatch(/"reason":"sandbox_lifetime_changed"/);
+  });
+})

@@ -576,3 +576,36 @@ describe('the client describes the record the wire carries', () => {
     expect([...EXECUTOR_PLUMBING].filter((field) => !onTheWire.has(field))).toEqual([]);
   });
 });
+
+/**
+ * An error that wraps another has to carry it.
+ *
+ * One path wrapped the platform's error in a message of its own — worth having, since
+ * git's version names a URL and a credential and not which of them failed — and threw
+ * the original away. The consequence was narrow and awkward: `code=` and `context=`
+ * reached the log for every failure except a clone's, which is the one most likely to
+ * be a platform hiccup mid-rollout.
+ *
+ * `cause` is where the original goes, and `platformReport` follows it. This checks
+ * that a wrapper which quotes an error also keeps it.
+ */
+describe('a wrapper keeps what it wrapped', () => {
+  test('every throw that quotes an error passes it as cause', () => {
+    const offenders: string[] = [];
+
+    for (const path of sources) {
+      const source = withoutComments(read(path));
+      // A throw whose message interpolates the caught error, which is the shape that
+      // replaces it. Matched up to the closing paren of the throw.
+      for (const match of source.matchAll(/throw new Error\(([\s\S]*?)\n\s*\);/g)) {
+        const body = match[1] as string;
+        if (!/errorMessage\(error\)|\$\{error/.test(body)) continue;
+        if (/cause/.test(body)) continue;
+        const line = source.slice(0, match.index).split('\n').length;
+        offenders.push(`${path}:${line}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
