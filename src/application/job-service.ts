@@ -314,7 +314,10 @@ export class JobService {
       options: {
         skipChecks: request.skipChecks,
         keepSandbox: request.keepSandbox,
-        push: request.push,
+        // Asking for a pull request is asking to push, here as at creation. It was
+        // implied there and not here, so a turn that asked for one on a job that had
+        // not been pushing got neither, and said so only as "nothing was pushed".
+        push: request.push ?? (request.pullRequest === undefined ? undefined : true),
       },
       commands: request.commands,
       pullRequest: request.pullRequest,
