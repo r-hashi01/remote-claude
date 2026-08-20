@@ -140,3 +140,31 @@ describe('the R2 hosts a container may reach', () => {
     expect(hosts.some((host) => host.includes('r2.cloudflarestorage.com'))).toBe(false);
   });
 });
+
+/**
+ * How much history to clone.
+ *
+ * One by default, because the platform's checkout fetches objects one at a time and
+ * every interruption seen so far landed inside it. Zero means all of it, for a
+ * deployment whose agents read history.
+ */
+describe('the clone depth', () => {
+  test('is one when nothing is configured', () => {
+    expect(config().cloneDepth).toBe(1);
+  });
+
+  test('is what the deployment set', () => {
+    expect(config({ CLONE_DEPTH: '50' }).cloneDepth).toBe(50);
+  });
+
+  // Zero is a decision, not a mistake: it means the whole history.
+  test('is zero when the deployment asks for everything', () => {
+    expect(config({ CLONE_DEPTH: '0' }).cloneDepth).toBe(0);
+  });
+
+  // Unparseable reads as zero — the whole history — rather than as one. A value
+  // nobody can interpret should not quietly shorten what a job can see.
+  test('is the whole history when the value makes no sense', () => {
+    expect(config({ CLONE_DEPTH: 'shallow please' }).cloneDepth).toBe(0);
+  });
+});

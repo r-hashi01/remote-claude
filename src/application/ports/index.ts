@@ -201,6 +201,20 @@ export interface ExecutorPolicy {
   /** How long a job's record and logs are kept. */
   retentionMs: number;
   sleepAfter: string;
+  /**
+   * How much history to clone. Zero or absent means all of it.
+   *
+   * One, by default. The platform clones with `partialclonefilter=blob:none`, which
+   * turns a checkout into a long stream of per-object fetches rather than one
+   * transfer — and every failure observed so far has landed inside `git.checkout`,
+   * which is the operation with the widest window to be interrupted in. Fewer
+   * objects, narrower window.
+   *
+   * The cost is history: an agent that runs `git log` sees one commit, and jobs have
+   * done that. Settable, so a deployment that needs the history can have it back
+   * without a code change.
+   */
+  cloneDepth: number;
   /** The deployment's defaults. A job may override them per key. */
   commands: JobCommands;
   /**

@@ -82,6 +82,8 @@ export function loadConfig(env: Env): Config {
     // the container, and a job's work happens inside one. See the conventions
     // test that keeps the two in that order.
     sleepAfter: env.SANDBOX_SLEEP_AFTER || '35m',
+    // One commit unless the deployment asks for more. `0` means the whole history.
+    cloneDepth: Math.max(0, Number.parseInt(env.CLONE_DEPTH ?? '1', 10) || 0),
     allowPush: bool(env.ALLOW_PUSH),
     allowCustomRepo: bool(env.ALLOW_CUSTOM_REPO),
     allowedHosts: parseAllowedHosts(env),

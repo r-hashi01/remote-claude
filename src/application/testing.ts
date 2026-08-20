@@ -357,7 +357,7 @@ export class FakeSandbox implements SandboxSession {
   readonly commands: string[] = [];
   destroyed = false;
   killed = false;
-  cloned: { repo: string; branch?: string } | null = null;
+  cloned: { repo: string; branch?: string; depth?: number } | null = null;
   cloneCount = 0;
   /** Set to make the next clone fail, as a missing branch or lost access would. */
   cloneError: string | null = null;
@@ -401,10 +401,19 @@ export class FakeSandbox implements SandboxSession {
     return script.result ?? { success: true, exitCode: 0, stdout: '', stderr: '' };
   }
 
-  async cloneRepository(repoUrl: string, options: { branch?: string }): Promise<void> {
+  async cloneRepository(
+    repoUrl: string,
+    options: { branch?: string; depth?: number }
+  ): Promise<void> {
     if (this.cloneErrorObject) throw this.cloneErrorObject;
     if (this.cloneError) throw new Error(this.cloneError);
-    this.cloned = { repo: repoUrl, branch: options.branch };
+    this.cloned = {
+      repo: repoUrl,
+      branch: options.branch,
+      // Recorded rather than dropped: how much history a job clones is a decision
+      // with a cost on both sides, so a test can see which one was made.
+      ...(options.depth === undefined ? {} : { depth: options.depth }),
+    };
     this.cloneCount += 1;
   }
 
