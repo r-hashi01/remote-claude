@@ -33,6 +33,7 @@ function policy(overrides: Partial<ExecutorPolicy> = {}): ExecutorPolicy {
     stallTimeoutMs: 8 * 60 * 1000,
     retentionMs: 7 * 24 * 60 * 60 * 1000,
     sleepAfter: '2m',
+    cloneDepth: 1,
     commands: { install: '', lint: '', test: '', build: '' },
     claudeAuthScheme: 'subscription',
     ...overrides,
@@ -215,7 +216,9 @@ describe('starting queued work', () => {
     await service.tick();
 
     const sandbox = sandboxes.get(`rc-${job.id}`);
-    expect(sandbox.cloned).toEqual({ repo: CONFIGURED_REPO, branch: 'main' });
+    // Shallow: the platform's checkout fetches objects one at a time, and that is
+    // where every interruption has landed.
+    expect(sandbox.cloned).toEqual({ repo: CONFIGURED_REPO, branch: 'main', depth: 1 });
     expect(sandbox.files.get(`${STATE_DIR}/runner.mjs`)).toBe('// runner');
     expect(JSON.parse(sandbox.files.get(`${STATE_DIR}/job.json`) as string)).toMatchObject({
       id: job.id,
@@ -1774,5 +1777,40 @@ describe('a clone that failed on the platform', () => {
     expect(record?.error).toMatch(/Check that the branch exists/);
     expect(record?.error).toMatch(/code=OPERATION_INTERRUPTED/);
     expect(record?.error).toMatch(/"reason":"sandbox_lifetime_changed"/);
+  });
+})
+
+/**
+ * How much history a job clones.
+ *
+ * The platform clones with `partialclonefilter=blob:none`, which makes a checkout a
+ * long run of per-object fetches rather than one transfer — and every interruption
+ * observed has landed inside `git.checkout`, the operation with the widest window to
+ * be interrupted in. `depth` was available the whole time and no caller passed it.
+ *
+ * Shallow by default, and settable: an agent that runs `git log` sees one commit, and
+ * jobs have done that.
+ */
+describe('cloning', () => {
+  test('takes one commit unless the deployment says otherwise', async () => {
+    const h = harness();
+    const job = await h.service.createJob({ prompt: 'x' });
+
+    await h.service.tick();
+
+    expect(h.sandboxes.get(`rc-${job.id}`).cloned).toMatchObject({
+      repo: CONFIGURED_REPO,
+      branch: 'main',
+      depth: 1,
+    });
+  });
+
+  test('takes the whole history when the depth is zero', async () => {
+    const h = harness({ policy: policy({ cloneDepth: 0 }) });
+    const job = await h.service.createJob({ prompt: 'x' });
+
+    await h.service.tick();
+
+    expect(h.sandboxes.get(`rc-${job.id}`).cloned).not.toHaveProperty('depth');
   });
 })

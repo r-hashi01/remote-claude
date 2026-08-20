@@ -152,6 +152,17 @@
     // teardown is what reclaims a sandbox.
     "SANDBOX_SLEEP_AFTER": "35m",
 
+    // How much history a job clones. `0` for all of it.
+    //
+    // One, because the platform clones with `partialclonefilter=blob:none`: a
+    // checkout is then a long run of per-object fetches rather than one transfer, and
+    // every interruption observed so far has landed inside `git.checkout`. Fewer
+    // objects is a narrower window to be interrupted in.
+    //
+    // The cost is history. An agent that runs `git log` sees one commit, and jobs
+    // have done that — raise this if that matters more than the window.
+    "CLONE_DEPTH": "1",
+
     "ALLOW_PUSH": "true",
 
     // Whether a job may name a repository other than REPO_URL.

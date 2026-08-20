@@ -506,6 +506,12 @@ export class JobService {
           await sandbox.cloneRepository(job.repo, {
             branch: job.baseBranch,
             targetDir: REPO_DIR,
+            // Shallow by default. The platform clones with blob:none, so a checkout
+            // is a long run of per-object fetches rather than one transfer, and every
+            // interruption seen so far has landed inside it. Fewer objects is a
+            // narrower window — and if the failures continue at the same rate, that
+            // says the window was not the reason, which is worth knowing too.
+            ...(policy.cloneDepth > 0 ? { depth: policy.cloneDepth } : {}),
           });
         } catch (error) {
           // git's own message is about a URL and a credential and says nothing

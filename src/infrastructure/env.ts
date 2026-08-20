@@ -78,6 +78,8 @@ export interface Env extends Secrets {
   JOB_TIMEOUT_MS?: string;
   CLAUDE_TIMEOUT_MS?: string;
   SANDBOX_SLEEP_AFTER?: string;
+  /** Commits to clone. `0` for the whole history. Default 1 — see ExecutorPolicy. */
+  CLONE_DEPTH?: string;
   ALLOW_PUSH?: string;
   ALLOW_CUSTOM_REPO?: string;
   SANDBOX_ALLOWED_HOSTS?: string;
