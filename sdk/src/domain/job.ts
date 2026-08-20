@@ -281,12 +281,37 @@ export interface StartJob {
  * repository, the base, the branch, the commands, and the model. The options
  * here override that job's, rather than resetting them.
  */
+/**
+ * A follow-up turn.
+ *
+ * **What a turn does not mention, it inherits.** Every option below carries over from
+ * the job being continued unless this turn gives a value — including `undefined`,
+ * which counts as not giving one. So a request built with every field listed and most
+ * of them undefined, which is what a client does when a caller left the flags off,
+ * changes nothing but the prompt.
+ *
+ * Worth stating because the executor did not do this for a while: a turn that said
+ * nothing about pushing stopped a job from pushing, and the job then reported "no pull
+ * request: nothing was pushed" after committing its work.
+ *
+ * `false` is a value, not silence. Send it to turn something off.
+ */
 export interface ContinueJob {
   prompt: string;
+  /** Unspecified keeps the previous turn's. `false` turns it off. */
   skipChecks?: boolean;
+  /** Unspecified keeps the previous turn's. `false` turns it off. */
   keepSandbox?: boolean;
+  /**
+   * Unspecified keeps the previous turn's. `false` turns it off.
+   *
+   * Asking for a pull request implies asking to push, here as at creation — so a turn
+   * that sends `pullRequest` and says nothing about `push` gets both.
+   */
   push?: boolean;
+  /** Merged per key over the previous turn's. An empty string still skips a step. */
   commands?: Partial<JobCommands>;
+  /** Unspecified keeps the previous turn's, including having asked for one. */
   pullRequest?: PullRequestRequest;
   /** Switch models for this turn. Unspecified keeps the previous turn's. */
   model?: string;

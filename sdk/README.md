@@ -115,6 +115,22 @@ For rendering once rather than watching — a server answering a page, or a chec
 what a run said — `getOutput(id, offset)` returns one window and the offset to
 continue from. Same rule about that offset: it is what you were shown.
 
+## What a follow-up turn carries
+
+Everything the turn does not mention. Options, commands, whether to push, whether a
+pull request was asked for — all of it comes from the job being continued unless this
+turn gives a value, and `undefined` is not a value:
+
+```ts
+await rc.continueJob(id, { prompt: 'A で行こう' });   // still pushes, if it was pushing
+await rc.continueJob(id, { prompt: 'just answer', push: false });   // now it does not
+```
+
+Worth knowing because the executor did not do this for a while: a turn that said
+nothing about pushing stopped a job from pushing, and the job reported "no pull
+request: nothing was pushed" after committing its work. If you build the request from
+a form or a flag object, leaving fields as `undefined` is safe — it reads as silence.
+
 ## Whether a job can be continued
 
 `continueJob` is refused when there is nothing to resume, and **the record says so
