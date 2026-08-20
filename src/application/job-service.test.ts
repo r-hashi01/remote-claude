@@ -1814,3 +1814,59 @@ describe('cloning', () => {
     expect(h.sandboxes.get(`rc-${job.id}`).cloned).not.toHaveProperty('depth');
   });
 })
+
+/**
+ * What a follow-up turn keeps.
+ *
+ * A job created with `--pr` pushed and opened one. The turn that answered its
+ * question committed and reported "no pull request: nothing was pushed" — the request
+ * carried `push: undefined`, which a spread treats as an answer rather than as
+ * silence.
+ */
+describe('continuing a job that was pushing', () => {
+  async function pushed(h: Harness): Promise<string> {
+    const job = await h.service.createJob({ prompt: 'first', pullRequest: {} });
+    const record = h.jobs.load(job.id)!;
+    record.recordClaudeSession('session-1');
+    record.recordWorkspace({ provider: 'fake', id: 'snap-1' });
+    record.settle('completed', h.clock.now());
+    h.jobs.save(record);
+    return job.id;
+  }
+
+  test('keeps pushing when the turn says nothing about it', async () => {
+    const h = harness({ policy: policy({ allowPush: true }) });
+    const first = await pushed(h);
+
+    // Exactly what the CLI sends when no flags are given: every field present,
+    // every value undefined.
+    const next = await h.service.continueJob(first, {
+      prompt: 'and now this',
+      skipChecks: undefined,
+      keepSandbox: undefined,
+      push: undefined,
+    });
+
+    expect(next.options.push).toBe(true);
+    expect(next.toRecord().pullRequest).toEqual({});
+  });
+
+  test('starts pushing when the turn asks for a pull request', async () => {
+    const h = harness({ policy: policy({ allowPush: true }) });
+    const job = await h.service.createJob({ prompt: 'first' });
+    const record = h.jobs.load(job.id)!;
+    record.recordClaudeSession('session-1');
+    record.recordWorkspace({ provider: 'fake', id: 'snap-1' });
+    record.settle('completed', h.clock.now());
+    h.jobs.save(record);
+
+    const next = await h.service.continueJob(job.id, {
+      prompt: 'open one this time',
+      pullRequest: {},
+    });
+
+    // Implied at creation and not here, so this asked for a pull request and got
+    // neither it nor a push.
+    expect(next.options.push).toBe(true);
+  });
+})

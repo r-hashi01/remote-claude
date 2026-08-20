@@ -299,3 +299,79 @@ describe('continuing a job', () => {
     );
   });
 });
+
+/**
+ * A turn that says nothing about an option leaves it alone.
+ *
+ * Observed: a job created with `--pr` pushed and opened one; the follow-up turn that
+ * answered its question committed and then reported "no pull request: nothing was
+ * pushed". The turn had said nothing about pushing, and nothing overrode true.
+ *
+ * `{ ...before.options, ...input.options }` looks like it inherits, and does — until
+ * the incoming object carries the key with `undefined`, which is what a request builds
+ * when a caller left the flag off. `undefined` is not silence in a spread; it is an
+ * answer, and it wins.
+ *
+ * The documented promise is that a turn's options override rather than reset.
+ */
+describe('the options a follow-up turn inherits', () => {
+  function finished(options: Record<string, unknown>): Job {
+    const job = Job.create({
+      id: 'first',
+      prompt: 'do the thing',
+      repo: 'https://github.com/o/r.git',
+      baseBranch: 'main',
+      branch: 'claude/first',
+      options,
+      now: 1_000,
+    });
+    job.recordClaudeSession('session-1');
+    job.recordWorkspace({ provider: 'fake', id: 'snap-1' });
+    job.settle('completed', 2_000);
+    return job;
+  }
+
+  test('keeps pushing when the turn does not mention it', () => {
+    const next = Job.continuing(finished({ push: true }), {
+      id: 'second',
+      prompt: 'and now this',
+      options: { push: undefined, skipChecks: undefined, keepSandbox: undefined },
+      now: 3_000,
+    });
+
+    expect(next.options.push).toBe(true);
+  });
+
+  test('stops pushing when the turn says so', () => {
+    const next = Job.continuing(finished({ push: true }), {
+      id: 'second',
+      prompt: 'just answer, do not push',
+      options: { push: false },
+      now: 3_000,
+    });
+
+    expect(next.options.push).toBe(false);
+  });
+
+  test('starts pushing when the turn asks and the first did not', () => {
+    const next = Job.continuing(finished({ push: false }), {
+      id: 'second',
+      prompt: 'now push it',
+      options: { push: true },
+      now: 3_000,
+    });
+
+    expect(next.options.push).toBe(true);
+  });
+
+  test('leaves every other option alone the same way', () => {
+    const next = Job.continuing(finished({ push: true, keepSandbox: true, skipChecks: true }), {
+      id: 'second',
+      prompt: 'carry on',
+      options: { push: undefined, keepSandbox: undefined, skipChecks: undefined },
+      now: 3_000,
+    });
+
+    expect(next.options).toMatchObject({ push: true, keepSandbox: true, skipChecks: true });
+  });
+});

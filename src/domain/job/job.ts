@@ -135,8 +135,14 @@ export class Job {
       // The same branch: this is the same work carrying on, not a second attempt
       // at it.
       branch: before.branch,
-      options: { ...before.options, ...input.options },
-      commands: { ...before.commands, ...input.commands },
+      // Silence inherits. A spread would not: a request built from a caller that
+      // left a flag off carries the key with `undefined`, and `undefined` wins —
+      // which is how a turn that said nothing about pushing stopped a job from
+      // pushing, and then reported "no pull request: nothing was pushed".
+      options: withStated(before.options, input.options),
+      // Same rule as the options: a key nobody set inherits, and an empty string is
+      // somebody setting it — that is how a step is skipped.
+      commands: withStated(before.commands ?? {}, input.commands),
       pullRequest: input.pullRequest ?? before.pullRequest,
       // The same model, unless this turn names another — a follow-up that
       // silently changed model would be a different agent answering the
@@ -388,4 +394,22 @@ export class Job {
 function definedOnly(commands: Partial<JobCommands> | undefined): Partial<JobCommands> {
   const given = Object.entries(commands ?? {}).filter(([, value]) => value !== undefined);
   return Object.fromEntries(given) as Partial<JobCommands>;
+}
+
+/**
+ * Overlay only what was actually said.
+ *
+ * The distinction a spread cannot make: a key that is absent means "unchanged", and a
+ * key that is present with `undefined` means the same thing when it came from a
+ * request object built with every field listed. Both are silence here.
+ *
+ * Saying `false` is not silence, and stays.
+ */
+function withStated<T extends object>(before: T, stated: Partial<T> | undefined): T {
+  const merged = { ...before };
+  for (const [key, value] of Object.entries(stated ?? {})) {
+    if (value === undefined) continue;
+    (merged as Record<string, unknown>)[key] = value;
+  }
+  return merged;
 }
