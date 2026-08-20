@@ -572,6 +572,47 @@ Orchestrator はコードを走らせないので control plane 側に置くべ�
 
 `session/update` の語彙と翻訳器は残した。ジョブのログの `· Read acp.ts` を作っている。
 
+### RC-19. `git.checkout` の中断 — 観測中
+
+spindle からの指摘で分かったこと。**clone のオプション `depth` は口が在るのに
+誰も渡していなかった。** プラットフォームは `partialclonefilter=blob:none` で
+clone するので、checkout は「1回の転送」ではなく**オブジェクトを1つずつ取る長い作業**になる。
+観測されている中断が必ず `git.checkout` で起きるのはそれと整合する。
+
+**実測したベースライン**（直近 77 ジョブ、`depth` 未指定の時代）:
+
+| | |
+|---|---|
+| 失敗 | 12 件 |
+| うち clone・中断系 | **6 件** |
+| その 6 件の対象 | **全部 spindle**。全部 2026-08-18 |
+
+**私の最初のライブ検証は、落ちている経路を試していなかった。** `--repo` で
+remote-claude を指定していたが、失敗は全部 spindle のクローンだった。
+オブジェクト数が多いほど窓が広いという説と整合する（remote-claude では元々落ちていない）。
+
+`depth: 1` を既定にした（`CLONE_DEPTH=0` で全履歴に戻せる）。導入後の観測:
+
+- remote-claude を対象に push と PR まで通過（浅いクローンからの push は**通る**。
+  新しいコミットの親はリモートが持つ先端なので、浅い履歴を押し込むわけではない）
+- spindle を対象に3本、いずれも clone を通過。**3本では結論にならない** ——
+  元々全ジョブが落ちていたのではなく一部だった
+
+**数え方**（同じ手順を再現するため）:
+
+```js
+const jobs = await rc.listJobs(100);
+const failed = jobs.filter((j) => j.status === 'failed');
+const clone = failed.filter((j) => /git\.checkout|cloning .* failed/i.test(j.error ?? ''));
+```
+
+**判定**: 同じ頻度で続くなら「窓の広さ」説は否定される。その場合の次の手は
+`exec("git clone")` で partial filter を避けること —— プラットフォームの最適化を
+捨てることになるので、こちらが先に否定されるまで手を付けない。
+
+なお `depth` の代償は履歴で、`git log` を走らせるジョブは実在する。
+効果が確認できなければ、代償だけが残るので戻す。
+
 ---
 
 ## dogfood の方針
